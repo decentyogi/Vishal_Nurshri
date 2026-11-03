@@ -1,0 +1,96 @@
+name: Build and Release Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Secrets & Keystore
+        run: |
+          # Ensure gradlew has execution permissions
+          chmod +x gradlew
+
+          # Prepare .env from .env.example if missing
+          if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+            cp .env.example .env
+          fi
+
+          # Decode debug.keystore from debug.keystore.base64
+          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare Release APK Artifact
+        run: |
+          mkdir -p release-output
+          cp app/build/outputs/apk/debug/app-debug.apk release-output/VishalNursery-v1.0.apk
+
+      - name: Upload APK as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VishalNursery-APK
+          path: release-output/VishalNursery-v1.0.apk
+          if-no-files-found: error
+
+      - name: Determine Release Tag
+        id: release_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            RELEASE_TITLE="Release $TAG_NAME"
+          else
+            TAG_NAME="v1.0-build-${{ github.run_number }}"
+            RELEASE_TITLE="Vishal Nursery v1.0 (Build ${{ github.run_number }})"
+          fi
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.title }}
+          body: |
+            ### 🌿 Vishal Nursery - Cash Memo & Bill Generator
+            
+            **Release Details:**
+            - **Commit:** `${{ github.sha }}`
+            - **Branch/Tag:** `${{ github.ref_name }}`
+            - **Build Number:** `${{ github.run_number }}`
+            
+            #### 📱 Installation
+            Download the attached **`VishalNursery-v1.0.apk`** below directly onto your Android phone and tap to install.
+          files: |
+            release-output/VishalNursery-v1.0.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

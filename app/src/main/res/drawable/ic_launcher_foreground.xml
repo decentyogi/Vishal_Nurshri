@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="0"
+        android:translateY="0">
+        <!-- Cash Memo Paper Document Base -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M32,24 C29.8,24 28,25.8 28,28 L28,78 C28,79.5 29.5,80.5 31,79.8 L34,78.2 L38,80.2 L42,78.2 L46,80.2 L50,78.2 L54,80.2 L58,78.2 L62,80.2 L66,78.2 L70,80.2 L74,78.2 L77,79.8 C78.5,80.5 80,79.5 80,78 L80,28 C80,25.8 78.2,24 76,24 Z" />
+        
+        <!-- Header banner bar on bill -->
+        <path
+            android:fillColor="#E2929A"
+            android:pathData="M34,31 L74,31 A2,2 0 0,1 76,33 L76,38 A2,2 0 0,1 74,40 L34,40 A2,2 0 0,1 32,38 L32,33 A2,2 0 0,1 34,31 Z" />
+            
+        <!-- Bill lines -->
+        <path
+            android:fillColor="#8A1325"
+            android:pathData="M36,46 L62,46 A1.5,1.5 0 0,1 63.5,47.5 L63.5,47.5 A1.5,1.5 0 0,1 62,49 L36,49 A1.5,1.5 0 0,1 34.5,47.5 L34.5,47.5 A1.5,1.5 0 0,1 36,46 Z" />
+            
+        <path
+            android:fillColor="#C85A65"
+            android:pathData="M67,46 L72,46 A1.5,1.5 0 0,1 73.5,47.5 L73.5,47.5 A1.5,1.5 0 0,1 72,49 L67,49 A1.5,1.5 0 0,1 65.5,47.5 L65.5,47.5 A1.5,1.5 0 0,1 67,46 Z" />
+
+        <path
+            android:fillColor="#8A1325"
+            android:pathData="M36,53 L58,53 A1.5,1.5 0 0,1 59.5,54.5 L59.5,54.5 A1.5,1.5 0 0,1 58,56 L36,56 A1.5,1.5 0 0,1 34.5,54.5 L34.5,54.5 A1.5,1.5 0 0,1 36,53 Z" />
+
+        <path
+            android:fillColor="#C85A65"
+            android:pathData="M65,53 L72,53 A1.5,1.5 0 0,1 73.5,54.5 L73.5,54.5 A1.5,1.5 0 0,1 72,56 L65,56 A1.5,1.5 0 0,1 63.5,54.5 L63.5,54.5 A1.5,1.5 0 0,1 65,53 Z" />
+
+        <path
+            android:fillColor="#8A1325"
+            android:pathData="M36,60 L54,60 A1.5,1.5 0 0,1 55.5,61.5 L55.5,61.5 A1.5,1.5 0 0,1 54,63 L36,63 A1.5,1.5 0 0,1 34.5,61.5 L34.5,61.5 A1.5,1.5 0 0,1 36,60 Z" />
+
+        <path
+            android:fillColor="#C85A65"
+            android:pathData="M65,60 L72,60 A1.5,1.5 0 0,1 73.5,61.5 L73.5,61.5 A1.5,1.5 0 0,1 72,63 L65,63 A1.5,1.5 0 0,1 63.5,61.5 L63.5,61.5 A1.5,1.5 0 0,1 65,60 Z" />
+
+        <!-- Total highlight bar -->
+        <path
+            android:fillColor="#8A1325"
+            android:pathData="M34,67 L74,67 A1,1 0 0,1 75,68 L75,68 A1,1 0 0,1 74,69 L34,69 A1,1 0 0,1 33,68 L33,68 A1,1 0 0,1 34,67 Z" />
+
+        <!-- Gold / Yellow Stamp Badge with checkmark on bottom right -->
+        <path
+            android:fillColor="#FFC107"
+            android:pathData="M70,68 C75.5,68 80,72.5 80,78 C80,83.5 75.5,88 70,88 C64.5,88 60,83.5 60,78 C60,72.5 64.5,68 70,68 Z" />
+
+        <path
+            android:fillColor="#4A0512"
+            android:pathData="M68,82.5 L64.5,79 L66,77.5 L68,79.5 L74,73.5 L75.5,75 Z" />
+    </group>
+</vector>
