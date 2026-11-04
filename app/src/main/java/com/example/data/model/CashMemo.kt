@@ -1,8 +1,10 @@
 package com.example.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.UUID
+import kotlin.math.max
 
 data class CashMemoItem(
     val id: String = UUID.randomUUID().toString(),
@@ -29,6 +31,10 @@ data class CashMemoEntity(
     val taxAmount: Double = 0.0,
     val previousDues: Double = 0.0,
     val grandTotal: Double,
+    val paidAmount: Double = 0.0,
+    val balanceDue: Double = 0.0,
+    val paymentMethod: String = "Cash",
+    val paymentStatusNote: String = "",
     val notes: String = "",
     val businessName: String = "विशाल नर्सरी",
     val businessPhone: String = "7631073743",
@@ -38,7 +44,76 @@ data class CashMemoEntity(
 ) {
     val totalPayableWithDues: Double
         get() = grandTotal + previousDues
+
+    val effectivePaidAmount: Double
+        get() = if (paidAmount > 0.0 || balanceDue > 0.0) paidAmount else totalPayableWithDues
+
+    val effectiveBalanceDue: Double
+        get() = max(0.0, balanceDue)
+
+    val hasPendingBalance: Boolean
+        get() = effectiveBalanceDue > 0.009
 }
+
+/**
+ * Room Entity storing customer profiles with name, phone number, address,
+ * and aggregated outstanding balance metrics for instant auto-fill in the cash memo workflow.
+ */
+@Entity(
+    tableName = "customer_profiles",
+    indices = [
+        Index(value = ["phoneNumber"]),
+        Index(value = ["name"])
+    ]
+)
+data class CustomerProfileEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val phoneNumber: String,
+    val address: String = "",
+    val outstandingBalance: Double = 0.0,
+    val totalPurchased: Double = 0.0,
+    val totalPaid: Double = 0.0,
+    val lastPromiseNote: String = "",
+    val lastTransactionAt: Long = System.currentTimeMillis(),
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    val hasOutstandingBalance: Boolean
+        get() = outstandingBalance > 0.009
+
+    val hasPendingBalance: Boolean
+        get() = hasOutstandingBalance
+}
+
+/**
+ * Room Entity storing the chronological outstanding balance history for each customer
+ * (e.g., bill created with partial payment, next-day balance settlement, or manual adjustment).
+ */
+@Entity(
+    tableName = "customer_balance_history",
+    indices = [
+        Index(value = ["customerId"]),
+        Index(value = ["memoId"])
+    ]
+)
+data class CustomerBalanceHistoryEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val customerId: Long,
+    val customerName: String,
+    val customerPhone: String,
+    val memoId: Long? = null,
+    val memoNumber: String = "",
+    val transactionType: String, // "BILL_CREATED", "PAYMENT_RECEIVED", "BALANCE_SETTLED", "MANUAL_ADJUSTMENT"
+    val billAmount: Double = 0.0,
+    val paidAmount: Double = 0.0,
+    val balanceChange: Double = 0.0,
+    val resultingBalance: Double = 0.0,
+    val paymentMethod: String = "Cash",
+    val note: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+)
 
 @Entity(tableName = "plant_rates")
 data class PlantRateEntity(

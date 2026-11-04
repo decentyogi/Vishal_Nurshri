@@ -3,18 +3,23 @@ package com.example.data.repository
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.data.db.CashMemoDao
+import com.example.data.db.CustomerDao
 import com.example.data.db.PlantRateDao
 import com.example.data.model.BusinessProfile
 import com.example.data.model.CashMemoEntity
 import com.example.data.model.CashMemoItem
+import com.example.data.model.CustomerBalanceHistoryEntity
+import com.example.data.model.CustomerProfileEntity
 import com.example.data.model.PlantRateEntity
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.max
 
 class CashMemoRepository(
     private val cashMemoDao: CashMemoDao,
     private val plantRateDao: PlantRateDao,
+    private val customerDao: CustomerDao,
     context: Context
 ) {
     private val prefs: SharedPreferences =
@@ -28,6 +33,29 @@ class CashMemoRepository(
     suspend fun getMemoById(id: Long): CashMemoEntity? =
         cashMemoDao.getCashMemoById(id)
 
+    // Customer Profiles & Outstanding Balance History
+    val allCustomers: Flow<List<CustomerProfileEntity>> = customerDao.getAllCustomers()
+
+    val allBalanceHistory: Flow<List<CustomerBalanceHistoryEntity>> = customerDao.getAllBalanceHistory()
+
+    fun searchCustomers(query: String): Flow<List<CustomerProfileEntity>> =
+        customerDao.searchCustomers(query)
+
+    fun getCustomerBalanceHistory(customerId: Long): Flow<List<CustomerBalanceHistoryEntity>> =
+        customerDao.getBalanceHistoryForCustomer(customerId)
+
+    suspend fun findMatchingCustomer(phone: String, name: String): CustomerProfileEntity? {
+        val cleanPhone = phone.trim()
+        val cleanName = name.trim()
+        if (cleanPhone.isNotBlank()) {
+            customerDao.getCustomerByPhone(cleanPhone)?.let { return it }
+        }
+        if (cleanName.isNotBlank()) {
+            customerDao.getCustomerByName(cleanName)?.let { return it }
+        }
+        return null
+    }
+
     suspend fun saveMemo(memo: CashMemoEntity): Long {
         val id = cashMemoDao.insertCashMemo(memo)
         try {
@@ -39,7 +67,344 @@ class CashMemoRepository(
                 }
             }
         } catch (_: Exception) {}
+
+        // Automatically sync customer profile & balance history when customer info is present
+        syncCustomerOnMemoSaved(memo.copy(id = id))
         return id
+    }
+
+    private suspend fun syncCustomerOnMemoSaved(memo: CashMemoEntity) {
+        val cleanName = memo.customerName.trim()
+        val cleanPhone = memo.customerMobile.trim()
+        if (cleanName.isBlank() && cleanPhone.isBlank()) return
+
+        val displayName = cleanName.ifBlank { "Customer ($cleanPhone)" }
+        val existing = findMatchingCustomer(cleanPhone, displayName)
+
+        val currentBillAmount = memo.grandTotal
+        val paidNow = memo.effectivePaidAmount
+        val newBalanceFromMemo = memo.effectiveBalanceDue
+
+        val now = System.currentTimeMillis()
+        if (existing != null) {
+            // If memo already included previousDues >= existing.outstandingBalance, newBalanceFromMemo is the new total balance;
+            // otherwise add current unpaid delta to existing balance.
+            val newOutstanding = if (memo.previousDues >= existing.outstandingBalance && existing.outstandingBalance > 0.0) {
+                newBalanceFromMemo
+            } else {
+                max(0.0, existing.outstandingBalance + (currentBillAmount - paidNow))
+            }
+            val balanceDelta = newOutstanding - existing.outstandingBalance
+
+            val updatedCustomer = existing.copy(
+                name = displayName,
+                phoneNumber = cleanPhone.ifBlank { existing.phoneNumber },
+                address = memo.customerAddress.trim().ifBlank { existing.address },
+                outstandingBalance = newOutstanding,
+                totalPurchased = existing.totalPurchased + currentBillAmount,
+                totalPaid = existing.totalPaid + paidNow,
+                lastPromiseNote = if (newOutstanding > 0.009) memo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)",
+                lastTransactionAt = now
+            )
+            customerDao.updateCustomer(updatedCustomer)
+
+            customerDao.insertBalanceHistory(
+                CustomerBalanceHistoryEntity(
+                    customerId = existing.id,
+                    customerName = updatedCustomer.name,
+                    customerPhone = updatedCustomer.phoneNumber,
+                    memoId = memo.id,
+                    memoNumber = memo.memoNumber,
+                    transactionType = "BILL_CREATED",
+                    billAmount = memo.totalPayableWithDues,
+                    paidAmount = paidNow,
+                    balanceChange = balanceDelta,
+                    resultingBalance = newOutstanding,
+                    paymentMethod = memo.paymentMethod,
+                    note = if (newOutstanding > 0.009) {
+                        "Bill #${memo.memoNumber}: Paid ₹${String.format("%.0f", paidNow)} of ₹${String.format("%.0f", memo.totalPayableWithDues)} • Rest ₹${String.format("%.0f", newOutstanding)} (${memo.paymentStatusNote.ifBlank { "Next Day" }})"
+                    } else {
+                        "Bill #${memo.memoNumber}: Full Payment ₹${String.format("%.0f", paidNow)}"
+                    },
+                    timestamp = now
+                )
+            )
+        } else {
+            val newProfile = CustomerProfileEntity(
+                name = displayName,
+                phoneNumber = cleanPhone,
+                address = memo.customerAddress.trim(),
+                outstandingBalance = newBalanceFromMemo,
+                totalPurchased = currentBillAmount,
+                totalPaid = paidNow,
+                lastPromiseNote = if (newBalanceFromMemo > 0.009) memo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)",
+                lastTransactionAt = now,
+                createdAt = now
+            )
+            val customerId = customerDao.insertCustomer(newProfile)
+
+            customerDao.insertBalanceHistory(
+                CustomerBalanceHistoryEntity(
+                    customerId = customerId,
+                    customerName = displayName,
+                    customerPhone = cleanPhone,
+                    memoId = memo.id,
+                    memoNumber = memo.memoNumber,
+                    transactionType = "BILL_CREATED",
+                    billAmount = memo.totalPayableWithDues,
+                    paidAmount = paidNow,
+                    balanceChange = newBalanceFromMemo,
+                    resultingBalance = newBalanceFromMemo,
+                    paymentMethod = memo.paymentMethod,
+                    note = if (newBalanceFromMemo > 0.009) {
+                        "Bill #${memo.memoNumber}: Paid ₹${String.format("%.0f", paidNow)} of ₹${String.format("%.0f", memo.totalPayableWithDues)} • Rest ₹${String.format("%.0f", newBalanceFromMemo)} (${memo.paymentStatusNote.ifBlank { "Next Day" }})"
+                    } else {
+                        "Bill #${memo.memoNumber}: Full Payment ₹${String.format("%.0f", paidNow)}"
+                    },
+                    timestamp = now
+                )
+            )
+        }
+    }
+
+    suspend fun updateMemoPaymentAndSyncCustomer(
+        oldMemo: CashMemoEntity,
+        updatedMemo: CashMemoEntity
+    ) {
+        cashMemoDao.updateCashMemo(updatedMemo)
+
+        val additionalPaid = updatedMemo.effectivePaidAmount - oldMemo.effectivePaidAmount
+        val balanceDelta = updatedMemo.effectiveBalanceDue - oldMemo.effectiveBalanceDue
+        val existing = findMatchingCustomer(updatedMemo.customerMobile, updatedMemo.customerName)
+
+        if (existing != null) {
+            val now = System.currentTimeMillis()
+            val newOutstanding = max(0.0, existing.outstandingBalance + balanceDelta)
+            val newTotalPaid = max(0.0, existing.totalPaid + additionalPaid)
+            val updatedCustomer = existing.copy(
+                outstandingBalance = newOutstanding,
+                totalPaid = newTotalPaid,
+                lastPromiseNote = if (newOutstanding > 0.009) updatedMemo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)",
+                lastTransactionAt = now
+            )
+            customerDao.updateCustomer(updatedCustomer)
+
+            customerDao.insertBalanceHistory(
+                CustomerBalanceHistoryEntity(
+                    customerId = existing.id,
+                    customerName = existing.name,
+                    customerPhone = existing.phoneNumber,
+                    memoId = updatedMemo.id,
+                    memoNumber = updatedMemo.memoNumber,
+                    transactionType = if (newOutstanding <= 0.009) "BALANCE_SETTLED" else "PAYMENT_RECEIVED",
+                    billAmount = updatedMemo.totalPayableWithDues,
+                    paidAmount = updatedMemo.effectivePaidAmount,
+                    balanceChange = balanceDelta,
+                    resultingBalance = newOutstanding,
+                    paymentMethod = updatedMemo.paymentMethod,
+                    note = if (newOutstanding <= 0.009) {
+                        "Settled Bill #${updatedMemo.memoNumber} • Total Paid ₹${String.format("%.0f", updatedMemo.effectivePaidAmount)}"
+                    } else {
+                        "Updated Bill #${updatedMemo.memoNumber} • Paid ₹${String.format("%.0f", updatedMemo.effectivePaidAmount)}, Remaining ₹${String.format("%.0f", newOutstanding)} (${updatedMemo.paymentStatusNote})"
+                    },
+                    timestamp = now
+                )
+            )
+        }
+    }
+
+    suspend fun saveOrUpdateCustomerProfile(
+        id: Long = 0,
+        name: String,
+        phoneNumber: String,
+        address: String,
+        outstandingBalance: Double,
+        promiseNote: String
+    ): Long {
+        val now = System.currentTimeMillis()
+        val existing = if (id > 0) customerDao.getCustomerById(id) else findMatchingCustomer(phoneNumber, name)
+
+        return if (existing != null) {
+            val balanceDelta = outstandingBalance - existing.outstandingBalance
+            val updated = existing.copy(
+                name = name.trim(),
+                phoneNumber = phoneNumber.trim(),
+                address = address.trim(),
+                outstandingBalance = max(0.0, outstandingBalance),
+                lastPromiseNote = if (outstandingBalance > 0.009) promiseNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)",
+                lastTransactionAt = now
+            )
+            customerDao.updateCustomer(updated)
+
+            if (kotlin.math.abs(balanceDelta) > 0.009) {
+                customerDao.insertBalanceHistory(
+                    CustomerBalanceHistoryEntity(
+                        customerId = existing.id,
+                        customerName = updated.name,
+                        customerPhone = updated.phoneNumber,
+                        transactionType = if (balanceDelta < 0) "PAYMENT_RECEIVED" else "MANUAL_ADJUSTMENT",
+                        billAmount = existing.outstandingBalance,
+                        paidAmount = if (balanceDelta < 0) -balanceDelta else 0.0,
+                        balanceChange = balanceDelta,
+                        resultingBalance = updated.outstandingBalance,
+                        paymentMethod = "Cash",
+                        note = if (updated.outstandingBalance <= 0.009) {
+                            "Full balance settled (चुकता)"
+                        } else {
+                            "Balance updated to ₹${String.format("%.0f", updated.outstandingBalance)} (${updated.lastPromiseNote})"
+                        },
+                        timestamp = now
+                    )
+                )
+            }
+            existing.id
+        } else {
+            val profile = CustomerProfileEntity(
+                name = name.trim(),
+                phoneNumber = phoneNumber.trim(),
+                address = address.trim(),
+                outstandingBalance = max(0.0, outstandingBalance),
+                totalPurchased = max(0.0, outstandingBalance),
+                totalPaid = 0.0,
+                lastPromiseNote = if (outstandingBalance > 0.009) promiseNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)",
+                lastTransactionAt = now,
+                createdAt = now
+            )
+            val newId = customerDao.insertCustomer(profile)
+            if (outstandingBalance > 0.009) {
+                customerDao.insertBalanceHistory(
+                    CustomerBalanceHistoryEntity(
+                        customerId = newId,
+                        customerName = profile.name,
+                        customerPhone = profile.phoneNumber,
+                        transactionType = "MANUAL_ADJUSTMENT",
+                        billAmount = outstandingBalance,
+                        paidAmount = 0.0,
+                        balanceChange = outstandingBalance,
+                        resultingBalance = outstandingBalance,
+                        paymentMethod = "Cash",
+                        note = "Opening balance ₹${String.format("%.0f", outstandingBalance)} (${profile.lastPromiseNote})",
+                        timestamp = now
+                    )
+                )
+            }
+            newId
+        }
+    }
+
+    suspend fun recordCustomerPaymentSettlement(
+        customer: CustomerProfileEntity,
+        amountReceivedNow: Double,
+        paymentMethod: String,
+        remainingPromiseNote: String
+    ) {
+        val now = System.currentTimeMillis()
+        val newBalance = max(0.0, customer.outstandingBalance - amountReceivedNow)
+        val updatedCustomer = customer.copy(
+            outstandingBalance = newBalance,
+            totalPaid = customer.totalPaid + amountReceivedNow,
+            lastPromiseNote = if (newBalance > 0.009) remainingPromiseNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)",
+            lastTransactionAt = now
+        )
+        customerDao.updateCustomer(updatedCustomer)
+
+        customerDao.insertBalanceHistory(
+            CustomerBalanceHistoryEntity(
+                customerId = customer.id,
+                customerName = customer.name,
+                customerPhone = customer.phoneNumber,
+                transactionType = if (newBalance <= 0.009) "BALANCE_SETTLED" else "PAYMENT_RECEIVED",
+                billAmount = customer.outstandingBalance,
+                paidAmount = amountReceivedNow,
+                balanceChange = -amountReceivedNow,
+                resultingBalance = newBalance,
+                paymentMethod = paymentMethod,
+                note = if (newBalance <= 0.009) {
+                    "Received ₹${String.format("%.0f", amountReceivedNow)} ($paymentMethod) • All dues settled (चुकता)"
+                } else {
+                    "Received ₹${String.format("%.0f", amountReceivedNow)} ($paymentMethod) • Remaining ₹${String.format("%.0f", newBalance)} ($remainingPromiseNote)"
+                },
+                timestamp = now
+            )
+        )
+    }
+
+    suspend fun deleteCustomer(customerId: Long) {
+        customerDao.deleteHistoryForCustomer(customerId)
+        customerDao.deleteCustomer(customerId)
+    }
+
+    suspend fun syncCustomersFromExistingMemosIfEmpty() {
+        if (customerDao.getCustomerCount() == 0) {
+            val memos = cashMemoDao.getAllCashMemosList().sortedBy { it.createdAt }
+            if (memos.isNotEmpty()) {
+                for (memo in memos) {
+                    syncCustomerOnMemoSaved(memo)
+                }
+            } else {
+                // Seed realistic nursery customer profiles with sample balance history so workflow is ready immediately
+                val now = System.currentTimeMillis()
+                val sampleCustomer1 = CustomerProfileEntity(
+                    name = "रमेश कुमार (Ramesh Kumar)",
+                    phoneNumber = "9835123456",
+                    address = "सासाराम (रोहतास)",
+                    outstandingBalance = 200.0,
+                    totalPurchased = 1000.0,
+                    totalPaid = 800.0,
+                    lastPromiseNote = "Next Day (कल देगा)",
+                    lastTransactionAt = now - 3600_000L
+                )
+                val id1 = customerDao.insertCustomer(sampleCustomer1)
+                customerDao.insertBalanceHistory(
+                    CustomerBalanceHistoryEntity(
+                        customerId = id1,
+                        customerName = sampleCustomer1.name,
+                        customerPhone = sampleCustomer1.phoneNumber,
+                        memoNumber = "500",
+                        transactionType = "BILL_CREATED",
+                        billAmount = 1000.0,
+                        paidAmount = 800.0,
+                        balanceChange = 200.0,
+                        resultingBalance = 200.0,
+                        paymentMethod = "Cash",
+                        note = "Bought plants worth ₹1000, paid ₹800 • Rest ₹200 Next Day (कल देगा)",
+                        timestamp = now - 3600_000L
+                    )
+                )
+
+                val sampleCustomer2 = CustomerProfileEntity(
+                    name = "अनीता देवी (Anita Devi)",
+                    phoneNumber = "7004128990",
+                    address = "डेहरी ऑन सोन",
+                    outstandingBalance = 0.0,
+                    totalPurchased = 650.0,
+                    totalPaid = 650.0,
+                    lastPromiseNote = "Fully Paid (चुकता)",
+                    lastTransactionAt = now - 86400_000L
+                )
+                val id2 = customerDao.insertCustomer(sampleCustomer2)
+                customerDao.insertBalanceHistory(
+                    CustomerBalanceHistoryEntity(
+                        customerId = id2,
+                        customerName = sampleCustomer2.name,
+                        customerPhone = sampleCustomer2.phoneNumber,
+                        memoNumber = "499",
+                        transactionType = "BILL_CREATED",
+                        billAmount = 650.0,
+                        paidAmount = 650.0,
+                        balanceChange = 0.0,
+                        resultingBalance = 0.0,
+                        paymentMethod = "UPI",
+                        note = "Bill #499: Full Payment ₹650 via UPI",
+                        timestamp = now - 86400_000L
+                    )
+                )
+            }
+        }
+    }
+
+    suspend fun updateMemo(memo: CashMemoEntity) {
+        cashMemoDao.updateCashMemo(memo)
     }
 
     suspend fun deleteMemo(id: Long) = cashMemoDao.deleteCashMemo(id)
@@ -90,6 +455,10 @@ class CashMemoRepository(
 
     suspend fun getAllCashMemosDirectly(): List<CashMemoEntity> {
         return cashMemoDao.getAllCashMemosList()
+    }
+
+    suspend fun getAllCustomersDirectly(): List<CustomerProfileEntity> {
+        return customerDao.getAllCustomersList()
     }
 
     suspend fun exportRatesJson(ratesList: List<PlantRateEntity>? = null): String {
@@ -164,6 +533,10 @@ class CashMemoRepository(
             obj.put("grandTotal", m.grandTotal)
             obj.put("previousDues", m.previousDues)
             obj.put("totalPayable", m.totalPayableWithDues)
+            obj.put("paidAmount", m.effectivePaidAmount)
+            obj.put("balanceDue", m.effectiveBalanceDue)
+            obj.put("paymentMethod", m.paymentMethod)
+            obj.put("paymentStatusNote", m.paymentStatusNote)
             obj.put("createdAt", m.createdAt)
             array.put(obj)
         }
@@ -188,6 +561,12 @@ class CashMemoRepository(
         var count = 0
         for (i in 0 until array.length()) {
             val obj = array.getJSONObject(i)
+            val grandTotal = obj.optDouble("grandTotal", 0.0)
+            val prevDues = obj.optDouble("previousDues", 0.0)
+            val totalPayable = grandTotal + prevDues
+            val paid = if (obj.has("paidAmount")) obj.optDouble("paidAmount", totalPayable) else totalPayable
+            val balance = if (obj.has("balanceDue")) obj.optDouble("balanceDue", 0.0) else max(0.0, totalPayable - paid)
+
             val memo = CashMemoEntity(
                 memoNumber = obj.optString("memoNumber", "501"),
                 customerName = obj.optString("customerName", ""),
@@ -199,11 +578,16 @@ class CashMemoRepository(
                 discount = obj.optDouble("discount", 0.0),
                 taxPercentage = obj.optDouble("taxPercentage", 0.0),
                 taxAmount = obj.optDouble("taxAmount", 0.0),
-                grandTotal = obj.optDouble("grandTotal", 0.0),
-                previousDues = obj.optDouble("previousDues", 0.0),
+                grandTotal = grandTotal,
+                previousDues = prevDues,
+                paidAmount = paid,
+                balanceDue = balance,
+                paymentMethod = obj.optString("paymentMethod", "Cash"),
+                paymentStatusNote = obj.optString("paymentStatusNote", ""),
                 createdAt = obj.optLong("createdAt", System.currentTimeMillis())
             )
-            cashMemoDao.insertCashMemo(memo)
+            val id = cashMemoDao.insertCashMemo(memo)
+            syncCustomerOnMemoSaved(memo.copy(id = id))
             count++
         }
         return count

@@ -402,7 +402,7 @@ object CashMemoExporter {
 
         currentY += 40f
 
-        // Optional Tax / Discount / Dues breakdown note
+        // Optional Tax / Discount / Dues / Partial Payment breakdown note
         if (isLastPage && (memo.discount > 0 || memo.taxPercentage > 0 || memo.previousDues > 0)) {
             textPaint.textSize = 20f
             textPaint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
@@ -417,7 +417,21 @@ object CashMemoExporter {
                 subDetails.append(" | पिछला बकाया (Dues): +₹ ${String.format(Locale.ENGLISH, "%.2f", memo.previousDues)}")
             }
             canvas.drawText(subDetails.toString(), innerMargin + 25f, currentY, textPaint)
-            currentY += 35f
+            currentY += 30f
+        }
+
+        if (isLastPage && memo.effectiveBalanceDue > 0.009) {
+            textPaint.textSize = 21f
+            textPaint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            val dueDetails = buildString {
+                append("जमा राशि (Paid): ₹ ${String.format(Locale.ENGLISH, "%.2f", memo.effectivePaidAmount)}")
+                append(" | शेष बकाया (Balance Due): ₹ ${String.format(Locale.ENGLISH, "%.2f", memo.effectiveBalanceDue)}")
+                if (memo.paymentStatusNote.isNotBlank()) {
+                    append(" • [${memo.paymentStatusNote}]")
+                }
+            }
+            canvas.drawText(dueDetails, innerMargin + 25f, currentY, textPaint)
+            currentY += 32f
         }
 
         // Bottom Signature Section (Shifted up neatly above bottom border as marked in img 2.jpg)

@@ -10,8 +10,11 @@ import com.example.data.db.AppDatabase
 import com.example.data.model.BusinessProfile
 import com.example.data.model.CashMemoEntity
 import com.example.data.model.CashMemoItem
+import com.example.data.model.CustomerBalanceHistoryEntity
+import com.example.data.model.CustomerProfileEntity
 import com.example.data.model.PlantRateEntity
 import com.example.data.repository.CashMemoRepository
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +32,7 @@ import kotlin.math.max
 data class MemoEditorState(
     val memoNumber: String = "501",
     val date: String = SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH).format(Date()),
+    val selectedCustomerId: Long? = null,
     val customerName: String = "",
     val customerMobile: String = "",
     val customerAddress: String = "",
@@ -38,6 +42,10 @@ data class MemoEditorState(
     val discount: Double = 0.0,
     val taxPercentage: Double = 0.0,
     val previousDues: Double = 0.0,
+    val hasCustomPayment: Boolean = false,
+    val paidAmount: Double = 0.0,
+    val paymentMethod: String = "Cash",
+    val paymentDueNote: String = "Next Day (कल देगा)",
     val notes: String = "",
     val isAnalyzing: Boolean = false,
     val analysisError: String? = null,
@@ -55,13 +63,27 @@ data class MemoEditorState(
 
     val totalPayable: Double
         get() = grandTotal + previousDues
+
+    val effectivePaidAmount: Double
+        get() = if (hasCustomPayment) paidAmount else totalPayable
+
+    val balanceDue: Double
+        get() = if (hasCustomPayment) max(0.0, totalPayable - paidAmount) else 0.0
+
+    val changeToReturn: Double
+        get() = if (hasCustomPayment) max(0.0, paidAmount - totalPayable) else 0.0
 }
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class CashMemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val repository = CashMemoRepository(db.cashMemoDao(), db.plantRateDao(), application)
+    private val repository = CashMemoRepository(
+        db.cashMemoDao(),
+        db.plantRateDao(),
+        db.customerDao(),
+        application
+    )
     private val geminiService = GeminiService()
 
     private val _businessProfile = MutableStateFlow(repository.getBusinessProfile())
@@ -86,6 +108,29 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         initialValue = emptyList()
     )
 
+    // Customer Profiles & Balance History
+    val customerProfiles: StateFlow<List<CustomerProfileEntity>> = _searchQuery.flatMapLatest { q ->
+        if (q.isBlank()) repository.allCustomers else repository.searchCustomers(q)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val allCustomersUnfiltered: StateFlow<List<CustomerProfileEntity>> = repository.allCustomers
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val allBalanceHistory: StateFlow<List<CustomerBalanceHistoryEntity>> = repository.allBalanceHistory
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
     private val _previewMemo = MutableStateFlow<CashMemoEntity?>(null)
     val previewMemo: StateFlow<CashMemoEntity?> = _previewMemo.asStateFlow()
 
@@ -104,6 +149,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             repository.populateDefaultRatesIfEmpty()
+            repository.syncCustomersFromExistingMemosIfEmpty()
         }
     }
 
@@ -123,6 +169,144 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     fun setDiscount(discount: Double) = _editorState.update { it.copy(discount = discount) }
     fun setTaxPercentage(tax: Double) = _editorState.update { it.copy(taxPercentage = tax) }
     fun setPreviousDues(dues: Double) = _editorState.update { it.copy(previousDues = dues) }
+
+    /**
+     * Auto-fills customer details and their outstanding balance into the active Cash Memo editor.
+     */
+    fun selectCustomerProfileForEditor(customer: CustomerProfileEntity) {
+        _editorState.update { state ->
+            state.copy(
+                selectedCustomerId = customer.id,
+                customerName = customer.name,
+                customerMobile = customer.phoneNumber,
+                customerAddress = customer.address.ifBlank { state.customerAddress },
+                previousDues = customer.outstandingBalance
+            )
+        }
+    }
+
+    fun getBalanceHistoryForCustomer(customerId: Long): Flow<List<CustomerBalanceHistoryEntity>> =
+        repository.getCustomerBalanceHistory(customerId)
+
+    fun saveOrUpdateCustomer(
+        id: Long = 0,
+        name: String,
+        phone: String,
+        address: String,
+        outstandingBalance: Double,
+        promiseNote: String
+    ) {
+        viewModelScope.launch {
+            repository.saveOrUpdateCustomerProfile(
+                id = id,
+                name = name,
+                phoneNumber = phone,
+                address = address,
+                outstandingBalance = outstandingBalance,
+                promiseNote = promiseNote
+            )
+        }
+    }
+
+    fun recordDirectCustomerPayment(
+        customer: CustomerProfileEntity,
+        amountReceivedNow: Double,
+        paymentMethod: String,
+        remainingPromiseNote: String
+    ) {
+        viewModelScope.launch {
+            repository.recordCustomerPaymentSettlement(
+                customer = customer,
+                amountReceivedNow = amountReceivedNow,
+                paymentMethod = paymentMethod,
+                remainingPromiseNote = remainingPromiseNote
+            )
+        }
+    }
+
+    fun deleteCustomer(customerId: Long) {
+        viewModelScope.launch {
+            repository.deleteCustomer(customerId)
+        }
+    }
+
+    fun applyPaymentCalculation(
+        billTotalOverride: Double?,
+        paidAmount: Double,
+        paymentMethod: String,
+        paymentDueNote: String
+    ) {
+        _editorState.update { state ->
+            val updatedItems = if (billTotalOverride != null && billTotalOverride > 0.0 && state.subtotal == 0.0) {
+                val first = state.items.firstOrNull()
+                if (first != null) {
+                    listOf(
+                        first.copy(
+                            description = first.description.ifBlank { "पौधा व सामग्री (Plant Purchase)" },
+                            quantity = 1.0,
+                            rate = billTotalOverride,
+                            amount = billTotalOverride
+                        )
+                    )
+                } else {
+                    listOf(
+                        CashMemoItem(
+                            id = UUID.randomUUID().toString(),
+                            serialNo = 1,
+                            description = "पौधा व सामग्री (Plant Purchase)",
+                            quantity = 1.0,
+                            rate = billTotalOverride,
+                            amount = billTotalOverride
+                        )
+                    )
+                }
+            } else {
+                state.items
+            }
+
+            state.copy(
+                items = updatedItems,
+                hasCustomPayment = true,
+                paidAmount = max(0.0, paidAmount),
+                paymentMethod = paymentMethod.ifBlank { "Cash" },
+                paymentDueNote = paymentDueNote.trim()
+            )
+        }
+    }
+
+    fun resetCustomPayment() {
+        _editorState.update {
+            it.copy(
+                hasCustomPayment = false,
+                paidAmount = 0.0,
+                paymentMethod = "Cash",
+                paymentDueNote = "Next Day (कल देगा)"
+            )
+        }
+    }
+
+    fun updateSavedMemoPayment(
+        memo: CashMemoEntity,
+        newPaidAmount: Double,
+        newPaymentMethod: String,
+        newPaymentNote: String
+    ) {
+        viewModelScope.launch {
+            val totalPayable = memo.totalPayableWithDues
+            val updatedBalance = max(0.0, totalPayable - newPaidAmount)
+            val finalNote = if (updatedBalance <= 0.009) "Fully Paid (चुकता)" else newPaymentNote
+            val updatedMemo = memo.copy(
+                paidAmount = newPaidAmount,
+                balanceDue = updatedBalance,
+                paymentMethod = newPaymentMethod,
+                paymentStatusNote = finalNote
+            )
+            repository.updateMemoPaymentAndSyncCustomer(memo, updatedMemo)
+            if (_previewMemo.value?.id == memo.id) {
+                _previewMemo.value = updatedMemo
+            }
+        }
+    }
 
     fun addItem() {
         _editorState.update { state ->
@@ -210,8 +394,6 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * Directly loads an item from the Rate Tab into the current active Cash Memo.
-     * If the current memo has a single empty item (#1), it populates it.
-     * Otherwise it adds a new entry (#2, #3, etc.)
      */
     fun addRateItemToCurrentMemo(plant: PlantRateEntity, isWholesale: Boolean): String {
         val price = if (isWholesale) plant.wholesalePrice else plant.retailPrice
@@ -220,7 +402,6 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         _editorState.update { state ->
             val firstItem = state.items.firstOrNull()
             if (state.items.size == 1 && firstItem != null && firstItem.description.isBlank() && firstItem.rate == 0.0) {
-                // Populate existing empty first slot
                 val updatedFirst = firstItem.copy(
                     description = plant.name,
                     quantity = 1.0,
@@ -230,7 +411,6 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
                 assignedIndex = 1
                 state.copy(items = listOf(updatedFirst))
             } else {
-                // Append new item
                 assignedIndex = state.items.size + 1
                 val newItem = CashMemoItem(
                     id = UUID.randomUUID().toString(),
@@ -304,7 +484,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
 
     suspend fun exportFullBackupJson(): String {
         val root = org.json.JSONObject()
-        root.put("version", 1)
+        root.put("version", 3)
         root.put("exportTime", System.currentTimeMillis())
         val rates = repository.getAllRatesDirectly()
         val ratesArr = org.json.JSONArray()
@@ -335,6 +515,10 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
             obj.put("grandTotal", m.grandTotal)
             obj.put("previousDues", m.previousDues)
             obj.put("totalPayable", m.totalPayableWithDues)
+            obj.put("paidAmount", m.effectivePaidAmount)
+            obj.put("balanceDue", m.effectiveBalanceDue)
+            obj.put("paymentMethod", m.paymentMethod)
+            obj.put("paymentStatusNote", m.paymentStatusNote)
             obj.put("createdAt", m.createdAt)
             memosArr.put(obj)
         }
@@ -487,6 +671,15 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         val calculatedSubtotal = finalItems.sumOf { it.amount }
         val calculatedTax = if (state.taxPercentage > 0) max(0.0, (calculatedSubtotal - state.discount) * (state.taxPercentage / 100.0)) else 0.0
         val calculatedGrandTotal = max(0.0, calculatedSubtotal - state.discount + calculatedTax)
+        val calculatedTotalPayable = calculatedGrandTotal + state.previousDues
+
+        val finalPaidAmount = if (state.hasCustomPayment) state.paidAmount else calculatedTotalPayable
+        val finalBalanceDue = if (state.hasCustomPayment) max(0.0, calculatedTotalPayable - state.paidAmount) else 0.0
+        val finalPaymentNote = if (state.hasCustomPayment) {
+            if (finalBalanceDue > 0.009) state.paymentDueNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)"
+        } else {
+            ""
+        }
 
         val entity = CashMemoEntity(
             memoNumber = state.memoNumber,
@@ -501,6 +694,10 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
             taxAmount = calculatedTax,
             previousDues = state.previousDues,
             grandTotal = calculatedGrandTotal,
+            paidAmount = finalPaidAmount,
+            balanceDue = finalBalanceDue,
+            paymentMethod = state.paymentMethod,
+            paymentStatusNote = finalPaymentNote,
             notes = state.aiValidationNote ?: "",
             businessName = profile.shopNameHindi,
             businessPhone = profile.phone,
@@ -523,6 +720,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
 
     fun loadMemoIntoEditor(memo: CashMemoEntity) {
         val items = CashMemoRepository.deserializeItems(memo.itemsJson)
+        val hasCustom = memo.balanceDue > 0.009 || (memo.paidAmount > 0.0 && memo.paidAmount != memo.totalPayableWithDues)
         _editorState.value = MemoEditorState(
             memoNumber = memo.memoNumber,
             date = memo.date,
@@ -533,6 +731,10 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
             discount = memo.discount,
             taxPercentage = memo.taxPercentage,
             previousDues = memo.previousDues,
+            hasCustomPayment = hasCustom,
+            paidAmount = memo.effectivePaidAmount,
+            paymentMethod = memo.paymentMethod.ifBlank { "Cash" },
+            paymentDueNote = memo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" },
             aiValidationNote = memo.notes
         )
     }

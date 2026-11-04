@@ -26,7 +26,6 @@ import com.example.data.model.CashMemoItem
 import com.example.ui.theme.BillMaroonInk
 import com.example.util.NumberToWordsConverter
 import java.util.Locale
-import kotlin.math.max
 
 @Composable
 fun CashMemoPaperSlip(
@@ -43,6 +42,10 @@ fun CashMemoPaperSlip(
     taxAmount: Double = 0.0,
     previousDues: Double = 0.0,
     grandTotal: Double,
+    paidAmount: Double = 0.0,
+    balanceDue: Double = 0.0,
+    paymentMethod: String = "Cash",
+    paymentStatusNote: String = "",
     pageIndex: Int = 0,
     totalPages: Int = 1,
     modifier: Modifier = Modifier
@@ -103,7 +106,7 @@ fun CashMemoPaperSlip(
 
                 Spacer(modifier = Modifier.height(2.dp))
 
-                // Shop Name in prominent Hindi typography with flanking floral emblems (matching img 1.jpg & img 2.jpg)
+                // Shop Name in prominent Hindi typography with flanking floral emblems
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
@@ -539,27 +542,44 @@ fun CashMemoPaperSlip(
                     )
                 }
 
-                // Discount / Tax / Dues breakdown line if last page
-                if (isLastPage && (discount > 0 || taxPercentage > 0 || previousDues > 0)) {
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = buildString {
-                                append("Bill Subtotal: ₹${String.format(Locale.ENGLISH, "%.2f", subtotal)}")
-                                if (discount > 0) append(" | छूट: -₹${String.format(Locale.ENGLISH, "%.2f", discount)}")
-                                if (taxPercentage > 0) append(" | GST (${taxPercentage}%): +₹${String.format(Locale.ENGLISH, "%.2f", taxAmount)}")
-                                if (previousDues > 0) append(" | पिछला बकाया (Dues): +₹${String.format(Locale.ENGLISH, "%.2f", previousDues)}")
-                            },
-                            color = maroon.copy(alpha = 0.9f),
-                            fontSize = 9.sp,
-                            fontStyle = FontStyle.Italic
-                        )
+                // Discount / Tax / Dues / Partial Payment breakdown line if last page
+                if (isLastPage && (discount > 0 || taxPercentage > 0 || previousDues > 0 || balanceDue > 0.009)) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (discount > 0 || taxPercentage > 0 || previousDues > 0) {
+                            Text(
+                                text = buildString {
+                                    append("Bill Subtotal: ₹${String.format(Locale.ENGLISH, "%.2f", subtotal)}")
+                                    if (discount > 0) append(" | छूट: -₹${String.format(Locale.ENGLISH, "%.2f", discount)}")
+                                    if (taxPercentage > 0) append(" | GST (${taxPercentage}%): +₹${String.format(Locale.ENGLISH, "%.2f", taxAmount)}")
+                                    if (previousDues > 0) append(" | पिछला बकाया (Dues): +₹${String.format(Locale.ENGLISH, "%.2f", previousDues)}")
+                                },
+                                color = maroon.copy(alpha = 0.9f),
+                                fontSize = 9.sp,
+                                fontStyle = FontStyle.Italic
+                            )
+                        }
+                        if (balanceDue > 0.009) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = buildString {
+                                    append("जमा राशि (Paid): ₹${String.format(Locale.ENGLISH, "%.2f", paidAmount)}")
+                                    append(" | शेष बकाया (Balance Due): ₹${String.format(Locale.ENGLISH, "%.2f", balanceDue)}")
+                                    if (paymentStatusNote.isNotBlank()) {
+                                        append(" • [$paymentStatusNote]")
+                                    }
+                                },
+                                color = maroon,
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Footer: Terms & Digital Signature Block (Matching 1.JPG)
+                // Footer: Terms & Digital Signature Block
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -571,7 +591,7 @@ fun CashMemoPaperSlip(
                         fontSize = 9.sp
                     )
 
-                    // Authenticated Digital Signature Box (Matching user's reference image 1.JPG)
+                    // Authenticated Digital Signature Box
                     Column(horizontalAlignment = Alignment.End) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),

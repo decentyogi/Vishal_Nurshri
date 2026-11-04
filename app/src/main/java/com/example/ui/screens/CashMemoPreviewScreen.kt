@@ -4,9 +4,7 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,15 +22,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.CashMemoEntity
 import com.example.data.repository.CashMemoRepository
 import com.example.ui.CashMemoViewModel
 import com.example.ui.components.CashMemoPaperSlip
-import com.example.ui.theme.MaroonPrimary
+import com.example.ui.components.PaymentCalculatorDialog
+import com.example.ui.theme.*
 import com.example.util.CashMemoExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +48,7 @@ fun CashMemoPreviewScreen(
     var isExporting by remember { mutableStateOf(false) }
     var selectedPageIndex by remember { mutableIntStateOf(0) }
     var showPrintDialog by remember { mutableStateOf(false) }
+    var showPaymentEditDialog by remember { mutableStateOf(false) }
     var selectedPrintSize by remember { mutableStateOf("80mm") } // "80mm", "58mm", "A5", "A4"
 
     BackHandler {
@@ -67,11 +67,24 @@ fun CashMemoPreviewScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Cash Memo #${memo?.memoNumber ?: ""}",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
+                    Column {
+                        Text(
+                            text = "Cash Memo #${memo?.memoNumber ?: ""}",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 18.sp
+                        )
+                        memo?.let { m ->
+                            Text(
+                                text = if (m.hasPendingBalance)
+                                    "Due: ₹${String.format(Locale.ENGLISH, "%.0f", m.effectiveBalanceDue)} (${m.paymentStatusNote.ifBlank { "Next Day" }})"
+                                else
+                                    "✓ Paid Full (₹${String.format(Locale.ENGLISH, "%.0f", m.totalPayableWithDues)})",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (m.hasPendingBalance) DueCrimson else BotanicalGreen
+                            )
+                        }
+                    }
                 },
                 navigationIcon = {
                     IconButton(
@@ -85,7 +98,17 @@ fun CashMemoPreviewScreen(
                     }
                 },
                 actions = {
-                    // Print Button in Top Bar
+                    IconButton(
+                        onClick = { showPaymentEditDialog = true },
+                        modifier = Modifier.testTag("preview_payment_calc_button")
+                    ) {
+                        Icon(
+                            Icons.Default.Calculate,
+                            contentDescription = "Update Paid & Balance",
+                            tint = MaroonPrimary
+                        )
+                    }
+
                     IconButton(
                         onClick = { showPrintDialog = true },
                         modifier = Modifier.testTag("print_memo_action_button")
@@ -102,7 +125,7 @@ fun CashMemoPreviewScreen(
                     ) {
                         Icon(Icons.Default.Edit, contentDescription = "Edit", modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Edit")
+                        Text("Edit", fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -128,11 +151,11 @@ fun CashMemoPreviewScreen(
                         onClick = { showPrintDialog = true },
                         modifier = Modifier
                             .weight(1f)
-                            .height(46.dp)
+                            .height(48.dp)
                             .testTag("print_button"),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Print", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
@@ -159,12 +182,12 @@ fun CashMemoPreviewScreen(
                             }
                         },
                         modifier = Modifier
-                            .weight(1.1f)
-                            .height(46.dp)
+                            .weight(1.15f)
+                            .height(48.dp)
                             .testTag("share_jpeg_button"),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = if (totalPages > 1) "Send $totalPages JPEGs" else "Send JPEG",
@@ -202,11 +225,11 @@ fun CashMemoPreviewScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = MaroonPrimary),
                         modifier = Modifier
                             .weight(1f)
-                            .height(46.dp)
+                            .height(48.dp)
                             .testTag("save_pdf_button"),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("PDF", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
@@ -229,6 +252,65 @@ fun CashMemoPreviewScreen(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Payment Status & Next-Day Balance Card on Preview Screen
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (currentMemo.hasPendingBalance) DueCrimsonContainer.copy(alpha = 0.65f) else BotanicalGreenContainer.copy(alpha = 0.6f),
+                        border = BorderStroke(
+                            1.dp,
+                            if (currentMemo.hasPendingBalance) DueCrimson.copy(alpha = 0.45f) else BotanicalGreen.copy(alpha = 0.4f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 4.dp)
+                            .clickable { showPaymentEditDialog = true }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (currentMemo.hasPendingBalance)
+                                        "Partial Payment • Balance Due: ₹${String.format(Locale.ENGLISH, "%.2f", currentMemo.effectiveBalanceDue)}"
+                                    else
+                                        "Full Payment Received • ₹${String.format(Locale.ENGLISH, "%.2f", currentMemo.totalPayableWithDues)}",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 13.sp,
+                                    color = if (currentMemo.hasPendingBalance) DueCrimson else BotanicalGreen
+                                )
+                                Text(
+                                    text = if (currentMemo.hasPendingBalance)
+                                        "Paid Today: ₹${String.format(Locale.ENGLISH, "%.2f", currentMemo.effectivePaidAmount)} • Promise: ${currentMemo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" }}"
+                                    else
+                                        "Tap here to adjust paid/due amount if customer paid partially",
+                                    fontSize = 11.5.sp,
+                                    color = InkTextSecondary
+                                )
+                            }
+
+                            FilledTonalButton(
+                                onClick = { showPaymentEditDialog = true },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Icon(Icons.Default.Calculate, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (currentMemo.hasPendingBalance) "Settle" else "Calc",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
                     // Multi-page Selector Tabs if items > 15
                     if (totalPages > 1) {
                         Surface(
@@ -264,13 +346,6 @@ fun CashMemoPreviewScreen(
                                 }
                             }
                         }
-                    } else {
-                        Text(
-                            text = "Authentic Bill Preview",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
                     }
 
                     // Render Paper Slip for Selected Page
@@ -289,6 +364,10 @@ fun CashMemoPreviewScreen(
                         taxAmount = currentMemo.taxAmount,
                         previousDues = currentMemo.previousDues,
                         grandTotal = currentMemo.grandTotal,
+                        paidAmount = currentMemo.effectivePaidAmount,
+                        balanceDue = currentMemo.effectiveBalanceDue,
+                        paymentMethod = currentMemo.paymentMethod,
+                        paymentStatusNote = currentMemo.paymentStatusNote,
                         pageIndex = selectedPageIndex,
                         totalPages = totalPages
                     )
@@ -324,6 +403,29 @@ fun CashMemoPreviewScreen(
                 }
             }
         }
+    }
+
+    // Payment Calculator Dialog on Preview Screen
+    if (showPaymentEditDialog && memo != null) {
+        val activeMemo = memo!!
+        PaymentCalculatorDialog(
+            initialTotalBill = activeMemo.totalPayableWithDues,
+            initialPaidAmount = activeMemo.effectivePaidAmount,
+            hasExistingCustomPayment = activeMemo.hasPendingBalance,
+            initialPaymentMethod = activeMemo.paymentMethod,
+            initialPaymentDueNote = activeMemo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" },
+            allowEditingTotalBill = false,
+            onDismiss = { showPaymentEditDialog = false },
+            onApply = { _, paid, method, note ->
+                viewModel.updateSavedMemoPayment(
+                    memo = activeMemo,
+                    newPaidAmount = paid,
+                    newPaymentMethod = method,
+                    newPaymentNote = note
+                )
+                Toast.makeText(context, "Payment & balance updated on Cash Memo!", Toast.LENGTH_SHORT).show()
+            }
+        )
     }
 
     // --- PRINT DIALOG WITH PAGE SIZES (80mm, 58mm, A5, A4) ---
