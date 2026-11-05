@@ -5,8 +5,8 @@ import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -37,6 +37,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.ui.CashMemoViewModel
 import com.example.ui.theme.*
 import com.example.util.QrCodeGenerator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -91,12 +92,17 @@ fun UpiQrScreen(
     }
 
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val qrImageBitmap = remember(qrBitmap) { qrBitmap?.asImageBitmap() }
     var showFullScreenQrModal by remember { mutableStateOf(false) }
     var isSharing by remember { mutableStateOf(false) }
+    var isSavingGallery by remember { mutableStateOf(false) }
 
-    // Generate QR bitmap asynchronously on Dispatchers.Default whenever UPI URI changes
+    // Generate QR bitmap asynchronously on Dispatchers.Default with light debounce when typing
     LaunchedEffect(upiUri) {
-        qrBitmap = QrCodeGenerator.generateQrBitmap(upiUri, sizePx = 720)
+        if (qrBitmap != null) {
+            delay(90)
+        }
+        qrBitmap = QrCodeGenerator.generateQrBitmap(upiUri, sizePx = 720, quietZoneModules = 5)
     }
 
     Scaffold(
@@ -173,7 +179,7 @@ fun UpiQrScreen(
                     OutlinedTextField(
                         value = amountInput,
                         onValueChange = { newValue ->
-                            if (newValue.all { it.isDigit() || it == '.' }) {
+                            if (newValue.count { it == '.' } <= 1 && newValue.all { it.isDigit() || it == '.' }) {
                                 amountInput = newValue
                             }
                         },
@@ -209,7 +215,9 @@ fun UpiQrScreen(
 
                     // Quick amount presets & active bill total chip
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (activeBillPayable > 0.0) {
@@ -234,7 +242,7 @@ fun UpiQrScreen(
                             )
                         }
 
-                        listOf("100", "200", "500", "1000").forEach { preset ->
+                        listOf("100", "200", "500", "800", "1000").forEach { preset ->
                             SuggestionChip(
                                 onClick = { amountInput = preset },
                                 label = { Text("₹$preset", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
@@ -248,7 +256,7 @@ fun UpiQrScreen(
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
                 border = BorderStroke(2.dp, MaroonPrimary),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -258,7 +266,7 @@ fun UpiQrScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
+                        .padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // Header Badge
@@ -278,45 +286,35 @@ fun UpiQrScreen(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "Scan with Google Pay • PhonePe • Paytm • BHIM",
+                        text = "Scan with Google Pay • Amazon Pay • PhonePe • Paytm",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF4A3B3E),
+                        color = Color(0xFF333333),
                         textAlign = TextAlign.Center
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // Crisp QR Bitmap Box
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = Color.White,
-                        border = BorderStroke(1.5.dp, Color(0xFFE0D4D6)),
-                        modifier = Modifier.size(250.dp)
+                    // Pure-White Unobstructed QR Box (No border touching the quiet zone)
+                    Box(
+                        modifier = Modifier.size(264.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val bmp = qrBitmap
-                            if (bmp != null) {
-                                Image(
-                                    bitmap = bmp.asImageBitmap(),
-                                    contentDescription = "UPI Payment QR Code for Vishal Nursery",
-                                    filterQuality = FilterQuality.None,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .testTag("upi_qr_bitmap_image")
-                                )
-                            } else {
-                                CircularProgressIndicator(color = MaroonPrimary)
-                            }
+                        if (qrImageBitmap != null) {
+                            Image(
+                                bitmap = qrImageBitmap,
+                                contentDescription = "UPI Payment QR Code for Vishal Nursery",
+                                filterQuality = FilterQuality.None,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("upi_qr_bitmap_image")
+                            )
+                        } else {
+                            CircularProgressIndicator(color = MaroonPrimary)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Dynamic Amount Pill
                     if (numericAmount != null && numericAmount > 0.0) {
@@ -394,11 +392,43 @@ fun UpiQrScreen(
                 }
             }
 
-            // 3. Action Buttons Row: Full-Screen Popup & Share QR
+            // 3. Action Buttons Row: Save to Gallery, Share QR, & Full-Screen Popup
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                OutlinedButton(
+                    onClick = {
+                        isSavingGallery = true
+                        coroutineScope.launch {
+                            try {
+                                val saved = QrCodeGenerator.saveQrCardToGallery(
+                                    context = context,
+                                    amount = numericAmount
+                                )
+                                Toast.makeText(
+                                    context,
+                                    if (saved) "Saved QR to Gallery (Pictures/VishalNursery)!" else "Could not save QR to Gallery",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } finally {
+                                isSavingGallery = false
+                            }
+                        }
+                    },
+                    enabled = !isSavingGallery && qrBitmap != null,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("save_qr_gallery_button")
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Save PNG", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                }
+
                 OutlinedButton(
                     onClick = {
                         val bmp = qrBitmap ?: return@OutlinedButton
@@ -420,28 +450,30 @@ fun UpiQrScreen(
                     },
                     enabled = !isSharing && qrBitmap != null,
                     shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
                         .testTag("share_qr_button")
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share QR", fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Share QR", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                 }
 
                 Button(
                     onClick = { showFullScreenQrModal = true },
                     colors = ButtonDefaults.buttonColors(containerColor = MaroonPrimary),
                     shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
                     modifier = Modifier
-                        .weight(1.2f)
+                        .weight(1.15f)
                         .height(48.dp)
                         .testTag("fullscreen_qr_button")
                 ) {
-                    Icon(Icons.Default.Fullscreen, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Full-Screen QR", fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp)
+                    Icon(Icons.Default.Fullscreen, contentDescription = null, modifier = Modifier.size(19.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Full Screen", fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
                 }
             }
 
@@ -487,8 +519,8 @@ fun UpiQrScreen(
 }
 
 /**
- * Clean, High-Contrast Full-Screen UPI QR Modal for customer scanning (Google Pay, PhonePe, Paytm).
- * Includes custom amount adjustment, "Share QR", and "Done" buttons.
+ * Clean, High-Contrast Full-Screen UPI QR Modal for customer scanning (Google Pay, Amazon Pay, PhonePe, Paytm).
+ * Includes custom amount adjustment, "Save PNG", "Share QR", and "Done" buttons.
  */
 @Composable
 fun FullScreenUpiQrDialog(
@@ -523,9 +555,13 @@ fun FullScreenUpiQrDialog(
     }
 
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val qrImageBitmap = remember(qrBitmap) { qrBitmap?.asImageBitmap() }
 
     LaunchedEffect(upiUri) {
-        qrBitmap = QrCodeGenerator.generateQrBitmap(upiUri, sizePx = 800)
+        if (qrBitmap != null) {
+            delay(90)
+        }
+        qrBitmap = QrCodeGenerator.generateQrBitmap(upiUri, sizePx = 800, quietZoneModules = 5)
     }
 
     Dialog(
@@ -613,51 +649,41 @@ fun FullScreenUpiQrDialog(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Google Pay • PhonePe • Paytm • BHIM",
+                        text = "Google Pay • Amazon Pay • PhonePe • Paytm",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF2E2627)
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // Large High-Contrast QR Frame
-                    Surface(
-                        shape = RoundedCornerShape(18.dp),
-                        color = Color.White,
-                        border = BorderStroke(3.dp, Color.Black),
-                        modifier = Modifier.size(290.dp)
+                    // Large Pure-White High-Contrast QR Frame
+                    Box(
+                        modifier = Modifier.size(300.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val bmp = qrBitmap
-                            if (bmp != null) {
-                                Image(
-                                    bitmap = bmp.asImageBitmap(),
-                                    contentDescription = "Full-Screen UPI QR Code",
-                                    filterQuality = FilterQuality.None,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                CircularProgressIndicator(color = MaroonPrimary)
-                            }
+                        if (qrImageBitmap != null) {
+                            Image(
+                                bitmap = qrImageBitmap,
+                                contentDescription = "Full-Screen UPI QR Code",
+                                filterQuality = FilterQuality.None,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            CircularProgressIndicator(color = MaroonPrimary)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Editable / Displayed Amount in Fullscreen Modal
                     OutlinedTextField(
                         value = amountText,
                         onValueChange = { v ->
-                            if (v.all { it.isDigit() || it == '.' }) {
+                            if (v.count { it == '.' } <= 1 && v.all { it.isDigit() || it == '.' }) {
                                 amountText = v
                             }
                         },
@@ -700,11 +726,41 @@ fun FullScreenUpiQrDialog(
                     )
                 }
 
-                // Bottom Action Bar: Share QR & Done
+                // Bottom Action Bar: Save PNG, Share QR & Done
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    OutlinedButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                val saved = QrCodeGenerator.saveQrCardToGallery(
+                                    context = context,
+                                    amount = amountVal
+                                )
+                                Toast.makeText(
+                                    context,
+                                    if (saved) "Saved QR to Gallery!" else "Could not save QR",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.5.dp, MaroonPrimary),
+                        modifier = Modifier
+                            .weight(0.9f)
+                            .height(50.dp)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, tint = MaroonPrimary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Save",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 13.5.sp,
+                            color = MaroonPrimary
+                        )
+                    }
+
                     OutlinedButton(
                         onClick = {
                             val bmp = qrBitmap ?: return@OutlinedButton
@@ -728,12 +784,12 @@ fun FullScreenUpiQrDialog(
                             .height(50.dp)
                             .testTag("modal_share_qr_button")
                     ) {
-                        Icon(Icons.Default.Share, contentDescription = null, tint = MaroonPrimary)
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(Icons.Default.Share, contentDescription = null, tint = MaroonPrimary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Share QR",
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 14.5.sp,
+                            fontSize = 13.5.sp,
                             color = MaroonPrimary
                         )
                     }
@@ -747,12 +803,12 @@ fun FullScreenUpiQrDialog(
                             .height(50.dp)
                             .testTag("modal_done_qr_button")
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Done",
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 14.5.sp,
+                            fontSize = 14.sp,
                             color = Color.White
                         )
                     }

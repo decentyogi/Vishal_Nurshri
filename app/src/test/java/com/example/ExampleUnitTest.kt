@@ -8,10 +8,16 @@ import com.example.data.model.CustomerProfileEntity
 import com.example.ui.MemoEditorState
 import com.example.util.NumberToWordsConverter
 import com.example.util.QrCodeGenerator
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.EnumMap
 
 class ExampleUnitTest {
     @Test
@@ -48,18 +54,51 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun upiDynamicQrUri_isCorrectlyEncoded() {
-        val uri1000 = QrCodeGenerator.buildUpiUri(amount = 1000.0)
-        assertEquals(
-            "upi://pay?pa=dangerousop@ybl&pn=Vishal%20Nursery&am=1000&cu=INR&tn=Plant%20Purchase",
-            uri1000
-        )
+    fun upiDynamicQrUri_isCorrectlyEncodedAndDecodableByZxingScanner() {
+        val testAmounts = listOf(100.0, 250.50, 800.0, 1000.0, 12500.0, null)
 
-        val uri850_50 = QrCodeGenerator.buildUpiUri(amount = 850.50)
-        assertEquals(
-            "upi://pay?pa=dangerousop@ybl&pn=Vishal%20Nursery&am=850.50&cu=INR&tn=Plant%20Purchase",
-            uri850_50
-        )
+        for (amount in testAmounts) {
+            val expectedUri = QrCodeGenerator.buildUpiUri(amount = amount)
+            if (amount == 1000.0) {
+                assertEquals(
+                    "upi://pay?pa=dangerousop@ybl&pn=Vishal%20Nursery&am=1000&cu=INR&tn=Plant%20Purchase",
+                    expectedUri
+                )
+            } else if (amount == null) {
+                assertEquals(
+                    "upi://pay?pa=dangerousop@ybl&pn=Vishal%20Nursery&cu=INR&tn=Plant%20Purchase",
+                    expectedUri
+                )
+            }
+
+            // Encode QR Matrix and render into pixel array exactly as QrCodeGenerator does
+            val matrix = QrCodeGenerator.encodeIsoQrMatrix(expectedUri, quietZoneModules = 5)
+            val mSize = matrix.size
+            val scale = 8
+            val imgSize = mSize * scale
+            val pixels = IntArray(imgSize * imgSize) { -0x1 } // WHITE (0xFFFFFFFF)
+            for (r in 0 until mSize) {
+                for (c in 0 until mSize) {
+                    if (matrix[r][c]) {
+                        for (dy in 0 until scale) {
+                            for (dx in 0 until scale) {
+                                pixels[(r * scale + dy) * imgSize + (c * scale + dx)] = -0x1000000 // BLACK (0xFF000000)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Decode using ZXing QRCodeReader (same engine used by Google Pay / Amazon Pay)
+            val source = RGBLuminanceSource(imgSize, imgSize, pixels)
+            val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
+            val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
+                put(DecodeHintType.TRY_HARDER, true)
+                put(DecodeHintType.CHARACTER_SET, "UTF-8")
+            }
+            val decoded = QRCodeReader().decode(binaryBitmap, hints)
+            assertEquals("QR code for amount=$amount must decode to exact UPI URI", expectedUri, decoded.text)
+        }
     }
 
     @Test

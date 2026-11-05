@@ -15,7 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -805,19 +805,19 @@ fun ScannerAndEditorScreen(
                 }
             }
 
-            // 4. BILL ITEM CARDS (Stable item IDs + contentType for 60/120fps scrolling)
-            itemsIndexed(
+            // 4. BILL ITEM CARDS (Stable item IDs + ID-based callbacks for 60/120fps scrolling)
+            items(
                 items = editorState.items,
-                key = { _, item -> item.id },
-                contentType = { _, _ -> "bill_item" }
-            ) { index, item ->
+                key = { item -> item.id },
+                contentType = { "bill_item" }
+            ) { item ->
                 BillItemCard(
                     item = item,
                     canDelete = editorState.items.size > 1,
-                    onUpdate = { desc, q, r -> viewModel.updateItem(index, desc, q, r) },
-                    onIncrementQty = { viewModel.incrementItemQty(index) },
-                    onDecrementQty = { viewModel.decrementItemQty(index) },
-                    onRemove = { viewModel.removeItem(index) }
+                    onUpdate = { desc, q, r -> viewModel.updateItemById(item.id, desc, q, r) },
+                    onIncrementQty = { viewModel.incrementItemQtyById(item.id) },
+                    onDecrementQty = { viewModel.decrementItemQtyById(item.id) },
+                    onRemove = { viewModel.removeItemById(item.id) }
                 )
             }
 
@@ -877,6 +877,54 @@ fun ScannerAndEditorScreen(
                             )
                         }
 
+                        var discountText by remember {
+                            mutableStateOf(
+                                if (editorState.discount == 0.0) ""
+                                else if (editorState.discount % 1.0 == 0.0) editorState.discount.toInt().toString()
+                                else editorState.discount.toString()
+                            )
+                        }
+                        LaunchedEffect(editorState.discount) {
+                            val parsed = discountText.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+                            if (kotlin.math.abs(parsed - editorState.discount) > 0.0001) {
+                                discountText = if (editorState.discount == 0.0) ""
+                                else if (editorState.discount % 1.0 == 0.0) editorState.discount.toInt().toString()
+                                else editorState.discount.toString()
+                            }
+                        }
+
+                        var taxText by remember {
+                            mutableStateOf(
+                                if (editorState.taxPercentage == 0.0) ""
+                                else if (editorState.taxPercentage % 1.0 == 0.0) editorState.taxPercentage.toInt().toString()
+                                else editorState.taxPercentage.toString()
+                            )
+                        }
+                        LaunchedEffect(editorState.taxPercentage) {
+                            val parsed = taxText.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+                            if (kotlin.math.abs(parsed - editorState.taxPercentage) > 0.0001) {
+                                taxText = if (editorState.taxPercentage == 0.0) ""
+                                else if (editorState.taxPercentage % 1.0 == 0.0) editorState.taxPercentage.toInt().toString()
+                                else editorState.taxPercentage.toString()
+                            }
+                        }
+
+                        var duesText by remember {
+                            mutableStateOf(
+                                if (editorState.previousDues == 0.0) ""
+                                else if (editorState.previousDues % 1.0 == 0.0) editorState.previousDues.toInt().toString()
+                                else editorState.previousDues.toString()
+                            )
+                        }
+                        LaunchedEffect(editorState.previousDues) {
+                            val parsed = duesText.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+                            if (kotlin.math.abs(parsed - editorState.previousDues) > 0.0001) {
+                                duesText = if (editorState.previousDues == 0.0) ""
+                                else if (editorState.previousDues % 1.0 == 0.0) editorState.previousDues.toInt().toString()
+                                else editorState.previousDues.toString()
+                            }
+                        }
+
                         // Discount Row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -889,13 +937,13 @@ fun ScannerAndEditorScreen(
                                 fontWeight = FontWeight.Medium
                             )
                             CompactNumberInputBox(
-                                value = if (editorState.discount == 0.0) "" else {
-                                    if (editorState.discount % 1.0 == 0.0) editorState.discount.toInt().toString() else editorState.discount.toString()
-                                },
-                                onValueChange = {
-                                    val sanitized = it.replace(',', '.').trim()
-                                    val d = sanitized.toDoubleOrNull() ?: 0.0
-                                    viewModel.setDiscount(d)
+                                value = discountText,
+                                onValueChange = { str ->
+                                    if (str.count { it == '.' } <= 1 && str.all { it.isDigit() || it == '.' }) {
+                                        discountText = str
+                                        val d = str.toDoubleOrNull() ?: 0.0
+                                        viewModel.setDiscount(d)
+                                    }
                                 },
                                 placeholder = "0.0",
                                 prefix = "₹",
@@ -916,13 +964,13 @@ fun ScannerAndEditorScreen(
                                 fontWeight = FontWeight.Medium
                             )
                             CompactNumberInputBox(
-                                value = if (editorState.taxPercentage == 0.0) "" else {
-                                    if (editorState.taxPercentage % 1.0 == 0.0) editorState.taxPercentage.toInt().toString() else editorState.taxPercentage.toString()
-                                },
-                                onValueChange = {
-                                    val sanitized = it.replace(',', '.').trim()
-                                    val t = sanitized.toDoubleOrNull() ?: 0.0
-                                    viewModel.setTaxPercentage(t)
+                                value = taxText,
+                                onValueChange = { str ->
+                                    if (str.count { it == '.' } <= 1 && str.all { it.isDigit() || it == '.' }) {
+                                        taxText = str
+                                        val t = str.toDoubleOrNull() ?: 0.0
+                                        viewModel.setTaxPercentage(t)
+                                    }
                                 },
                                 placeholder = "0%",
                                 suffix = "%",
@@ -943,13 +991,13 @@ fun ScannerAndEditorScreen(
                                 fontWeight = FontWeight.Medium
                             )
                             CompactNumberInputBox(
-                                value = if (editorState.previousDues == 0.0) "" else {
-                                    if (editorState.previousDues % 1.0 == 0.0) editorState.previousDues.toInt().toString() else editorState.previousDues.toString()
-                                },
-                                onValueChange = {
-                                    val sanitized = it.replace(',', '.').trim()
-                                    val dues = sanitized.toDoubleOrNull() ?: 0.0
-                                    viewModel.setPreviousDues(dues)
+                                value = duesText,
+                                onValueChange = { str ->
+                                    if (str.count { it == '.' } <= 1 && str.all { it.isDigit() || it == '.' }) {
+                                        duesText = str
+                                        val dues = str.toDoubleOrNull() ?: 0.0
+                                        viewModel.setPreviousDues(dues)
+                                    }
                                 },
                                 placeholder = "0.0",
                                 prefix = "₹",
@@ -1419,6 +1467,39 @@ private fun BillItemCard(
         String.format(Locale.ENGLISH, "₹ %.2f", item.amount)
     }
 
+    // Local text states for Qty and Rate prevent cursor jumps and preserve trailing '.' when typing decimals
+    var qtyText by remember(item.id) {
+        mutableStateOf(
+            if (item.quantity == 0.0) ""
+            else if (item.quantity % 1.0 == 0.0) item.quantity.toInt().toString()
+            else item.quantity.toString()
+        )
+    }
+    LaunchedEffect(item.quantity) {
+        val currentParsed = qtyText.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+        if (kotlin.math.abs(currentParsed - item.quantity) > 0.0001) {
+            qtyText = if (item.quantity == 0.0) ""
+            else if (item.quantity % 1.0 == 0.0) item.quantity.toInt().toString()
+            else item.quantity.toString()
+        }
+    }
+
+    var rateText by remember(item.id) {
+        mutableStateOf(
+            if (item.rate == 0.0) ""
+            else if (item.rate % 1.0 == 0.0) item.rate.toInt().toString()
+            else item.rate.toString()
+        )
+    }
+    LaunchedEffect(item.rate) {
+        val currentParsed = rateText.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+        if (kotlin.math.abs(currentParsed - item.rate) > 0.0001) {
+            rateText = if (item.rate == 0.0) ""
+            else if (item.rate % 1.0 == 0.0) item.rate.toInt().toString()
+            else item.rate.toString()
+        }
+    }
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1548,11 +1629,13 @@ private fun BillItemCard(
                         }
 
                         CompactNumberInputBox(
-                            value = if (item.quantity == 0.0) "" else if (item.quantity % 1.0 == 0.0) item.quantity.toInt().toString() else item.quantity.toString(),
+                            value = qtyText,
                             onValueChange = { qtyStr ->
-                                val sanitized = qtyStr.replace(',', '.').trim()
-                                val q = sanitized.toDoubleOrNull() ?: 0.0
-                                onUpdate(item.description, q, item.rate)
+                                if (qtyStr.count { it == '.' } <= 1 && qtyStr.all { it.isDigit() || it == '.' }) {
+                                    qtyText = qtyStr
+                                    val q = qtyStr.toDoubleOrNull() ?: 0.0
+                                    onUpdate(item.description, q, item.rate)
+                                }
                             },
                             placeholder = "1",
                             modifier = Modifier.weight(1f)
@@ -1581,11 +1664,13 @@ private fun BillItemCard(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     CompactNumberInputBox(
-                        value = if (item.rate == 0.0) "" else if (item.rate % 1.0 == 0.0) item.rate.toInt().toString() else item.rate.toString(),
+                        value = rateText,
                         onValueChange = { rateStr ->
-                            val sanitized = rateStr.replace(',', '.').trim()
-                            val r = sanitized.toDoubleOrNull() ?: 0.0
-                            onUpdate(item.description, item.quantity, r)
+                            if (rateStr.count { it == '.' } <= 1 && rateStr.all { it.isDigit() || it == '.' }) {
+                                rateText = rateStr
+                                val r = rateStr.toDoubleOrNull() ?: 0.0
+                                onUpdate(item.description, item.quantity, r)
+                            }
                         },
                         placeholder = "0.00",
                         prefix = "₹ ",

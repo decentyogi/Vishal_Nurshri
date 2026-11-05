@@ -334,9 +334,23 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         _editorState.update { state ->
             if (state.items.size <= 1) {
                 state.copy(items = listOf(CashMemoItem(id = UUID.randomUUID().toString(), serialNo = 1, description = "", quantity = 1.0, rate = 0.0, amount = 0.0)))
-            } else {
+            } else if (index in state.items.indices) {
                 val updated = state.items.toMutableList().apply { removeAt(index) }
                 val renumbered = updated.mapIndexed { idx, itm -> itm.copy(serialNo = idx + 1) }
+                state.copy(items = renumbered)
+            } else state
+        }
+    }
+
+    fun removeItemById(itemId: String) {
+        _editorState.update { state ->
+            val idx = state.items.indexOfFirst { it.id == itemId }
+            if (idx == -1) state
+            else if (state.items.size <= 1) {
+                state.copy(items = listOf(CashMemoItem(id = UUID.randomUUID().toString(), serialNo = 1, description = "", quantity = 1.0, rate = 0.0, amount = 0.0)))
+            } else {
+                val updated = state.items.toMutableList().apply { removeAt(idx) }
+                val renumbered = updated.mapIndexed { i, itm -> itm.copy(serialNo = i + 1) }
                 state.copy(items = renumbered)
             }
         }
@@ -346,8 +360,32 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         _editorState.update { state ->
             if (index in state.items.indices) {
                 val calculatedAmount = if (quantity > 0 && rate > 0) quantity * rate else 0.0
+                val current = state.items[index]
+                if (current.description == description && current.quantity == quantity && current.rate == rate && current.amount == calculatedAmount) {
+                    return@update state
+                }
                 val updated = state.items.toMutableList()
-                val current = updated[index]
+                updated[index] = current.copy(
+                    description = description,
+                    quantity = quantity,
+                    rate = rate,
+                    amount = calculatedAmount
+                )
+                state.copy(items = updated)
+            } else state
+        }
+    }
+
+    fun updateItemById(itemId: String, description: String, quantity: Double, rate: Double) {
+        _editorState.update { state ->
+            val index = state.items.indexOfFirst { it.id == itemId }
+            if (index != -1) {
+                val calculatedAmount = if (quantity > 0 && rate > 0) quantity * rate else 0.0
+                val current = state.items[index]
+                if (current.description == description && current.quantity == quantity && current.rate == rate && current.amount == calculatedAmount) {
+                    return@update state
+                }
+                val updated = state.items.toMutableList()
                 updated[index] = current.copy(
                     description = description,
                     quantity = quantity,
@@ -374,9 +412,51 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun incrementItemQtyById(itemId: String) {
+        _editorState.update { state ->
+            val index = state.items.indexOfFirst { it.id == itemId }
+            if (index != -1) {
+                val updated = state.items.toMutableList()
+                val current = updated[index]
+                val newQty = current.quantity + 1.0
+                updated[index] = current.copy(
+                    quantity = newQty,
+                    amount = if (current.rate > 0) newQty * current.rate else 0.0
+                )
+                state.copy(items = updated)
+            } else state
+        }
+    }
+
     fun decrementItemQty(index: Int) {
         _editorState.update { state ->
             if (index in state.items.indices) {
+                val updated = state.items.toMutableList()
+                val current = updated[index]
+                if (current.quantity > 1.0) {
+                    val newQty = current.quantity - 1.0
+                    updated[index] = current.copy(
+                        quantity = newQty,
+                        amount = if (current.rate > 0) newQty * current.rate else 0.0
+                    )
+                    state.copy(items = updated)
+                } else {
+                    if (state.items.size <= 1) {
+                        state.copy(items = listOf(CashMemoItem(id = UUID.randomUUID().toString(), serialNo = 1, description = "", quantity = 1.0, rate = 0.0, amount = 0.0)))
+                    } else {
+                        updated.removeAt(index)
+                        val renumbered = updated.mapIndexed { idx, itm -> itm.copy(serialNo = idx + 1) }
+                        state.copy(items = renumbered)
+                    }
+                }
+            } else state
+        }
+    }
+
+    fun decrementItemQtyById(itemId: String) {
+        _editorState.update { state ->
+            val index = state.items.indexOfFirst { it.id == itemId }
+            if (index != -1) {
                 val updated = state.items.toMutableList()
                 val current = updated[index]
                 if (current.quantity > 1.0) {
