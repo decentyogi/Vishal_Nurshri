@@ -34,7 +34,9 @@ import com.example.BuildConfig
 import com.example.data.model.BusinessProfile
 import com.example.ui.CashMemoViewModel
 import com.example.ui.theme.MaroonPrimary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -80,8 +82,10 @@ fun BusinessProfileScreen(
         if (uri != null) {
             coroutineScope.launch {
                 try {
-                    val stream: InputStream? = context.contentResolver.openInputStream(uri)
-                    val content = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                    val content = withContext(Dispatchers.IO) {
+                        val stream: InputStream? = context.contentResolver.openInputStream(uri)
+                        stream?.bufferedReader()?.use { it.readText() } ?: ""
+                    }
                     if (content.isNotBlank()) {
                         val (rateCount, memoCount) = viewModel.importFullBackupJson(content)
                         val msg = buildString {
@@ -103,12 +107,10 @@ fun BusinessProfileScreen(
             "openai" -> listOf("gpt-4o-mini (Free / Cheap)", "gpt-4o", "gpt-3.5-turbo")
             "claude" -> listOf("claude-3-5-haiku-20241022 (Fast / Free tier)", "claude-3-5-sonnet-20241022", "claude-3-haiku-20240307")
             else -> listOf(
-                "gemini-3.5-flash (Fast & Recommended)",
-                "gemini-3.8-flash (Latest Model)",
-                "gemini-2.5-flash (Standard)",
+                "gemini-2.5-flash (Recommended & Stable)",
                 "gemini-2.0-flash",
-                "gemini-1.5-flash",
                 "gemini-2.0-flash-lite (Ultra Fast)",
+                "gemini-1.5-flash",
                 "gemini-1.5-pro (High Quality)"
             )
         }
@@ -137,7 +139,7 @@ fun BusinessProfileScreen(
             ) {
                 Button(
                     onClick = {
-                        val num = nextMemoNumber.toIntOrNull() ?: 501
+                        val num = nextMemoNumber.toIntOrNull() ?: 1001
                         val cleanModel = selectedModel.split(" ").first()
                         val updated = currentProfile.copy(
                             shopNameHindi = shopNameHindi,
@@ -286,7 +288,7 @@ fun BusinessProfileScreen(
                         modifier = Modifier.fillMaxWidth().testTag("next_memo_number_input"),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        supportingText = { Text("Auto-increments with each generated cash memo (e.g. 501, 502...)") }
+                        supportingText = { Text("Auto-increments with each generated cash memo (starts at 1001)") }
                     )
                 }
             }
@@ -350,7 +352,7 @@ fun BusinessProfileScreen(
                                 text = { Text("Google Gemini (Default)") },
                                 onClick = {
                                     selectedProvider = "gemini"
-                                    selectedModel = "gemini-3.5-flash"
+                                    selectedModel = "gemini-2.5-flash"
                                     showProviderDropdown = false
                                 }
                             )
@@ -608,22 +610,27 @@ fun BusinessProfileScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        try {
-                            val dir = File(context.cacheDir, "backups").apply { mkdirs() }
-                            val file = File(dir, "${exportFileNamePrefix}_${System.currentTimeMillis()}.json")
-                            FileOutputStream(file).use { out ->
-                                out.write(exportedJsonText.toByteArray())
+                        coroutineScope.launch {
+                            try {
+                                val file = withContext(Dispatchers.IO) {
+                                    val dir = File(context.cacheDir, "backups").apply { mkdirs() }
+                                    val f = File(dir, "${exportFileNamePrefix}_${System.currentTimeMillis()}.json")
+                                    FileOutputStream(f).use { out ->
+                                        out.write(exportedJsonText.toByteArray())
+                                    }
+                                    f
+                                }
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/json"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Share JSON Backup"))
+                                showExportDialog = false
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "application/json"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(shareIntent, "Share JSON Backup"))
-                            showExportDialog = false
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_SHORT).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaroonPrimary)

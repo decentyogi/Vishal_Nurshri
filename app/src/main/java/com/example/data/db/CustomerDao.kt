@@ -50,6 +50,9 @@ interface CustomerDao {
     @Query("DELETE FROM customer_profiles WHERE id = :id")
     suspend fun deleteCustomer(id: Long)
 
+    @Query("DELETE FROM customer_profiles")
+    suspend fun deleteAllCustomers()
+
     // Customer Balance History queries
     @Query("SELECT * FROM customer_balance_history WHERE customerId = :customerId ORDER BY timestamp DESC")
     fun getBalanceHistoryForCustomer(customerId: Long): Flow<List<CustomerBalanceHistoryEntity>>
@@ -68,4 +71,7 @@ interface CustomerDao {
 
     @Query("DELETE FROM customer_balance_history WHERE customerId = :customerId")
     suspend fun deleteHistoryForCustomer(customerId: Long)
+
+    @Query("DELETE FROM customer_balance_history")
+    suspend fun deleteAllBalanceHistory()
 }

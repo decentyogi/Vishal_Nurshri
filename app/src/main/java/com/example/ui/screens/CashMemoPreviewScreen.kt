@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.CashMemoItem
 import com.example.data.repository.CashMemoRepository
 import com.example.ui.CashMemoViewModel
 import com.example.ui.components.CashMemoPaperSlip
@@ -55,8 +56,10 @@ fun CashMemoPreviewScreen(
         onBack()
     }
 
-    val allItems = remember(memo) {
-        memo?.let { CashMemoRepository.deserializeItems(it.itemsJson) } ?: emptyList()
+    val allItems by produceState<List<CashMemoItem>>(initialValue = emptyList(), key1 = memo?.itemsJson) {
+        value = withContext(Dispatchers.Default) {
+            memo?.let { CashMemoRepository.deserializeItems(it.itemsJson) } ?: emptyList()
+        }
     }
     val chunkedPages = remember(allItems) {
         if (allItems.isEmpty()) listOf(emptyList()) else allItems.chunked(15)
@@ -167,11 +170,11 @@ fun CashMemoPreviewScreen(
                             isExporting = true
                             coroutineScope.launch {
                                 try {
-                                    val bitmaps = withContext(Dispatchers.Default) {
-                                        CashMemoExporter.renderCashMemoPages(activeMemo, businessProfile, 1200)
+                                    val files = withContext(Dispatchers.IO) {
+                                        val bitmaps = CashMemoExporter.renderCashMemoPages(activeMemo, businessProfile, 1200)
+                                        val baseName = "CashMemo_${activeMemo.memoNumber}_${System.currentTimeMillis()}"
+                                        CashMemoExporter.saveBitmapsToJpegs(context, bitmaps, baseName)
                                     }
-                                    val baseName = "CashMemo_${activeMemo.memoNumber}_${System.currentTimeMillis()}"
-                                    val files = CashMemoExporter.saveBitmapsToJpegs(context, bitmaps, baseName)
                                     val shareIntent = CashMemoExporter.getMultipleShareIntent(context, files, "image/jpeg")
                                     context.startActivity(Intent.createChooser(shareIntent, "Share Cash Memo Image(s)"))
                                 } catch (e: Exception) {

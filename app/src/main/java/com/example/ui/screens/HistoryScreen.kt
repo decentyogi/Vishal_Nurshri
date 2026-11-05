@@ -18,15 +18,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CashMemoEntity
+import com.example.data.model.CashMemoItem
 import com.example.data.model.CustomerProfileEntity
 import com.example.data.repository.CashMemoRepository
 import com.example.ui.CashMemoViewModel
@@ -142,6 +143,8 @@ fun HistoryScreen(
                 )
             )
         },
+        // Requirement 3: Standard bottom-right anchoring for "+ New Bill" FAB
+        floatingActionButtonPosition = FabPosition.End,
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = {
@@ -161,7 +164,7 @@ fun HistoryScreen(
                 },
                 text = {
                     Text(
-                        if (viewMode == HistoryViewMode.CUSTOMERS) "New Customer" else "New Bill",
+                        if (viewMode == HistoryViewMode.CUSTOMERS) "+ New Customer" else "+ New Bill",
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -170,11 +173,13 @@ fun HistoryScreen(
         },
         modifier = modifier
     ) { innerPadding ->
+        // Requirement 3: Horizontally centered parent container with consistent 16dp left/right margins
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 14.dp)
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Segmented View Switcher: Saved Bills vs Customer Profiles & Balance History
             Surface(
@@ -252,92 +257,98 @@ fun HistoryScreen(
                 }
             }
 
-            // Financial Ledger Summary Card (Total Sales | Collected | Pending Dues)
+            // Requirement 1 & 3: Financial Ledger Summary Card (solid color without gradient shader overdraw,
+            // and center-aligned aggregate revenue metrics: "Total Sales", "Received", "Pending Due")
             Card(
                 shape = RoundedCornerShape(18.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                colors = CardDefaults.cardColors(containerColor = MaroonPrimary),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 6.dp)
             ) {
-                Column(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(MaroonPrimaryDark, MaroonPrimary)
-                            )
-                        )
-                        .padding(14.dp)
+                        .padding(vertical = 14.dp, horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Total Sales (कुल बिक्री)",
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.8f)
-                            )
-                            Text(
-                                text = String.format(Locale.ENGLISH, "₹ %.0f", totalSales),
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Black,
-                                color = Color.White
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .height(32.dp)
-                                .background(Color.White.copy(alpha = 0.25f))
+                        Text(
+                            text = "Total Sales",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White.copy(alpha = 0.88f),
+                            textAlign = TextAlign.Center
                         )
-
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "Received (कुल प्राप्त)",
-                                fontSize = 11.sp,
-                                color = Color(0xFFB9F6CA)
-                            )
-                            Text(
-                                text = String.format(Locale.ENGLISH, "₹ %.0f", totalCollected),
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Black,
-                                color = Color(0xFFB9F6CA)
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .height(32.dp)
-                                .background(Color.White.copy(alpha = 0.25f))
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = String.format(Locale.ENGLISH, "₹ %.0f", totalSales),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
                         )
+                    }
 
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            horizontalAlignment = Alignment.End
-                        ) {
-                            Text(
-                                text = "Pending Due (बकाया)",
-                                fontSize = 11.sp,
-                                color = Color(0xFFFFD54F)
-                            )
-                            Text(
-                                text = String.format(Locale.ENGLISH, "₹ %.0f", totalPendingDue),
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Black,
-                                color = Color(0xFFFFD54F)
-                            )
-                        }
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(34.dp)
+                            .background(Color.White.copy(alpha = 0.25f))
+                    )
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Received",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFB9F6CA),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = String.format(Locale.ENGLISH, "₹ %.0f", totalCollected),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFFB9F6CA),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(34.dp)
+                            .background(Color.White.copy(alpha = 0.25f))
+                    )
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Pending Due",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFFFD54F),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = String.format(Locale.ENGLISH, "₹ %.0f", totalPendingDue),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFFFFD54F),
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }
@@ -375,7 +386,8 @@ fun HistoryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 val totalCount = if (viewMode == HistoryViewMode.BILLS) memos.size else customers.size
                 val dueCount = if (viewMode == HistoryViewMode.BILLS) pendingDueCount else customersWithDuesCount
@@ -423,17 +435,20 @@ fun HistoryScreen(
                 if (filteredMemos.isEmpty()) {
                     EmptyHistoryBox(
                         title = when {
-                            searchQuery.isNotBlank() -> "No matching memos found"
-                            selectedFilter == HistoryFilter.PENDING_DUE -> "No pending dues! All bills are settled."
-                            else -> "No cash memos saved yet"
+                            searchQuery.isNotBlank() -> "No matching bills found"
+                            selectedFilter == HistoryFilter.PENDING_DUE -> "No pending dues"
+                            else -> "No bills generated yet"
                         },
-                        subtitle = "Scan a rough bill or create a new cash memo",
-                        buttonText = "Create Cash Memo",
+                        subtitle = "Create a new cash memo or scan a rough bill to get started.",
+                        buttonText = "+ New Bill",
                         onAction = onNewMemo
                     )
                 } else {
+                    // Requirement 1 & 3: Stable item keys, horizontally centered cards, and 88dp bottom padding
+                    // so all cards scroll completely clear of the FAB and bottom navigation bar
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(top = 6.dp, bottom = 88.dp)
                     ) {
@@ -458,16 +473,17 @@ fun HistoryScreen(
                     EmptyHistoryBox(
                         title = when {
                             searchQuery.isNotBlank() -> "No matching customer profile found"
-                            selectedFilter == HistoryFilter.PENDING_DUE -> "No customer has pending dues!"
+                            selectedFilter == HistoryFilter.PENDING_DUE -> "No pending dues"
                             else -> "No customer profiles saved yet"
                         },
-                        subtitle = "Customers and their balance history are automatically saved when you create cash memos, or you can add one directly.",
+                        subtitle = "Customers and their balance history are automatically saved when you create bills.",
                         buttonText = "Add Customer Profile",
                         onAction = { showAddCustomerDialog = true }
                     )
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(top = 6.dp, bottom = 88.dp)
                     ) {
@@ -655,21 +671,24 @@ private fun EmptyHistoryBox(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(bottom = 64.dp),
+            .padding(bottom = 80.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        ) {
             Surface(
                 shape = CircleShape,
                 color = MaroonContainer.copy(alpha = 0.5f),
-                modifier = Modifier.size(72.dp)
+                modifier = Modifier.size(68.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
                         contentDescription = null,
                         tint = MaroonPrimary,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
             }
@@ -678,13 +697,15 @@ private fun EmptyHistoryBox(
                 text = title,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = subtitle,
                 fontSize = 12.5.sp,
-                color = MaterialTheme.colorScheme.outline
+                color = MaterialTheme.colorScheme.outline,
+                textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(16.dp))
             Button(
@@ -692,8 +713,6 @@ private fun EmptyHistoryBox(
                 colors = ButtonDefaults.buttonColors(containerColor = MaroonPrimary),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
                 Text(buttonText, fontWeight = FontWeight.Bold)
             }
         }
@@ -910,8 +929,12 @@ private fun HistoryMemoCard(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val items = remember(memo) {
-        CashMemoRepository.deserializeItems(memo.itemsJson)
+
+    // Requirement 1: Offload JSON deserialization of bill items off the Main UI thread
+    val items by produceState<List<CashMemoItem>>(initialValue = emptyList(), key1 = memo.itemsJson) {
+        value = withContext(Dispatchers.Default) {
+            CashMemoRepository.deserializeItems(memo.itemsJson)
+        }
     }
 
     Card(
@@ -1003,13 +1026,15 @@ private fun HistoryMemoCard(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            Text(
-                text = "${items.size} item(s): " + items.take(3).joinToString(", ") { it.description.ifBlank { "Item" } } + if (items.size > 3) "..." else "",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.outline,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (items.isNotEmpty()) {
+                Text(
+                    text = "${items.size} item(s): " + items.take(3).joinToString(", ") { it.description.ifBlank { "Item" } } + if (items.size > 3) "..." else "",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
 
             // Partial Payment & Next-Day Promise Strip
             if (memo.hasPendingBalance) {
@@ -1065,10 +1090,10 @@ private fun HistoryMemoCard(
                     IconButton(
                         onClick = {
                             coroutineScope.launch {
-                                val bitmap = withContext(Dispatchers.Default) {
-                                    CashMemoExporter.renderCashMemoToBitmap(memo, businessProfile, 1200)
+                                val file = withContext(Dispatchers.IO) {
+                                    val bitmap = CashMemoExporter.renderCashMemoToBitmap(memo, businessProfile, 1200)
+                                    CashMemoExporter.saveBitmapToJpeg(context, bitmap, "CashMemo_${memo.memoNumber}.jpg")
                                 }
-                                val file = CashMemoExporter.saveBitmapToJpeg(context, bitmap, "CashMemo_${memo.memoNumber}.jpg")
                                 val shareIntent = CashMemoExporter.getShareIntent(context, file, "image/jpeg")
                                 context.startActivity(Intent.createChooser(shareIntent, "Share Cash Memo Image"))
                             }
@@ -1082,7 +1107,7 @@ private fun HistoryMemoCard(
                     IconButton(
                         onClick = {
                             coroutineScope.launch {
-                                val file = withContext(Dispatchers.Default) {
+                                val file = withContext(Dispatchers.IO) {
                                     CashMemoExporter.exportToPdf(context, memo, businessProfile, "CashMemo_${memo.memoNumber}.pdf")
                                 }
                                 val shareIntent = CashMemoExporter.getShareIntent(context, file, "application/pdf")

@@ -26,6 +26,7 @@ import com.example.ui.screens.CashMemoPreviewScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.RateScreen
 import com.example.ui.screens.ScannerAndEditorScreen
+import com.example.ui.screens.UpiQrScreen
 import com.example.ui.theme.CashMemoTheme
 import com.example.ui.theme.DueCrimson
 import com.example.ui.theme.MaroonContainer
@@ -35,6 +36,7 @@ enum class AppTab(val title: String, val selectedIcon: ImageVector, val unselect
     CREATE("Create Bill", Icons.AutoMirrored.Filled.ReceiptLong, Icons.AutoMirrored.Outlined.ReceiptLong),
     RATE("Rate List", Icons.Default.Sell, Icons.Outlined.Sell),
     HISTORY("Saved & Dues", Icons.Default.History, Icons.Outlined.History),
+    UPI_QR("UPI QR", Icons.Default.QrCode2, Icons.Outlined.QrCode2),
     PROFILE("Profile", Icons.Default.Storefront, Icons.Outlined.Storefront)
 }
 
@@ -125,7 +127,8 @@ fun MainAppContainer(viewModel: CashMemoViewModel) {
                                     label = {
                                         Text(
                                             text = tab.title,
-                                            fontSize = 11.5.sp,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
                                             fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
                                         )
                                     },
@@ -177,6 +180,10 @@ fun MainAppContainer(viewModel: CashMemoViewModel) {
                                         selectedTab = AppTab.CREATE
                                     }
                                 )
+                            }
+
+                            AppTab.UPI_QR -> {
+                                UpiQrScreen(viewModel = viewModel)
                             }
 
                             AppTab.PROFILE -> {

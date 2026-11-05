@@ -44,7 +44,9 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,8 +79,10 @@ fun RateScreen(
         if (uri != null) {
             coroutineScope.launch {
                 try {
-                    val stream: InputStream? = context.contentResolver.openInputStream(uri)
-                    val content = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                    val content = withContext(Dispatchers.IO) {
+                        val stream: InputStream? = context.contentResolver.openInputStream(uri)
+                        stream?.bufferedReader()?.use { it.readText() } ?: ""
+                    }
                     if (content.isNotBlank()) {
                         val count = viewModel.importRatesJson(content)
                         Toast.makeText(context, "Successfully imported $count plants!", Toast.LENGTH_LONG).show()
@@ -361,7 +365,7 @@ fun RateScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = if (searchQuery.isBlank()) "No plants in rate list" else "No plant matches '$searchQuery'",
+                            text = if (searchQuery.isBlank()) "No plants added to rate list" else "No plant matches '$searchQuery'",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -673,22 +677,27 @@ fun RateScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        try {
-                            val dir = File(context.cacheDir, "backups").apply { mkdirs() }
-                            val file = File(dir, "VishalNursery_Rates_${System.currentTimeMillis()}.json")
-                            FileOutputStream(file).use { out ->
-                                out.write(exportedJsonText.toByteArray())
+                        coroutineScope.launch {
+                            try {
+                                val file = withContext(Dispatchers.IO) {
+                                    val dir = File(context.cacheDir, "backups").apply { mkdirs() }
+                                    val f = File(dir, "VishalNursery_Rates_${System.currentTimeMillis()}.json")
+                                    FileOutputStream(f).use { out ->
+                                        out.write(exportedJsonText.toByteArray())
+                                    }
+                                    f
+                                }
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/json"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Rate List Backup"))
+                                showExportDialog = false
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "application/json"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(shareIntent, "Share Rate List Backup"))
-                            showExportDialog = false
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_SHORT).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaroonPrimary)

@@ -10,10 +10,15 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.InputStream
 import kotlin.math.max
 
+/**
+ * Memory-safe bitmap decoding and EXIF orientation normalization.
+ * Downscales large camera/gallery bitmaps to max 1024x1024 on Dispatchers.IO.
+ */
 object BitmapUtils {
+
+    private const val MAX_SCANNER_DIMENSION = 1024
 
     fun createTempCameraUri(context: Context): Pair<Uri, File> {
         val storageDir = File(context.cacheDir, "camera_captures").apply {
@@ -30,10 +35,9 @@ object BitmapUtils {
     suspend fun decodeSampledBitmap(
         context: Context,
         uri: Uri,
-        maxDimension: Int = 1600
+        maxDimension: Int = MAX_SCANNER_DIMENSION
     ): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            // First decode with inJustDecodeBounds=true to check dimensions
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
@@ -43,10 +47,8 @@ object BitmapUtils {
 
             val origWidth = options.outWidth
             val origHeight = options.outHeight
-
             if (origWidth <= 0 || origHeight <= 0) return@withContext null
 
-            // Calculate inSampleSize
             var inSampleSize = 1
             var halfWidth = origWidth
             var halfHeight = origHeight
@@ -56,7 +58,6 @@ object BitmapUtils {
                 inSampleSize *= 2
             }
 
-            // Decode bitmap with inSampleSize set
             options.inJustDecodeBounds = false
             options.inSampleSize = inSampleSize
             options.inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -65,7 +66,6 @@ object BitmapUtils {
                 BitmapFactory.decodeStream(stream, null, options)
             } ?: return@withContext null
 
-            // Correct orientation from EXIF
             val rotatedBitmap = try {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val exif = ExifInterface(stream)
@@ -79,12 +79,11 @@ object BitmapUtils {
                 sampledBitmap
             }
 
-            // If still larger than maxDimension, downscale
             val largestDim = max(rotatedBitmap.width, rotatedBitmap.height)
             if (largestDim > maxDimension) {
                 val scale = maxDimension.toFloat() / largestDim.toFloat()
-                val targetW = (rotatedBitmap.width * scale).toInt()
-                val targetH = (rotatedBitmap.height * scale).toInt()
+                val targetW = max(1, (rotatedBitmap.width * scale).toInt())
+                val targetH = max(1, (rotatedBitmap.height * scale).toInt())
                 val finalScaled = Bitmap.createScaledBitmap(rotatedBitmap, targetW, targetH, true)
                 if (finalScaled != rotatedBitmap) {
                     rotatedBitmap.recycle()
@@ -93,8 +92,7 @@ object BitmapUtils {
             } else {
                 rotatedBitmap
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
             null
         }
     }
@@ -109,6 +107,10 @@ object BitmapUtils {
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
             else -> return bitmap
         }
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (rotated != bitmap) {
+            bitmap.recycle()
+        }
+        return rotated
     }
 }

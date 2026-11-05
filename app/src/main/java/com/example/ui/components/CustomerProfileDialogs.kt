@@ -10,12 +10,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -72,11 +73,7 @@ fun CustomerPickerDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(MaroonPrimaryDark, MaroonPrimary)
-                            )
-                        )
+                        .background(MaroonPrimary)
                         .padding(horizontal = 18.dp, vertical = 14.dp)
                 ) {
                     Row(
@@ -328,11 +325,7 @@ fun CustomerBalanceHistoryDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(MaroonPrimaryDark, MaroonPrimary)
-                            )
-                        )
+                        .background(MaroonPrimary)
                         .padding(horizontal = 18.dp, vertical = 14.dp)
                 ) {
                     Row(
@@ -462,8 +455,8 @@ fun CustomerBalanceHistoryDialog(
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Icon(
                                                     imageVector = when {
-                                                        isDueAdded -> Icons.Default.CallMade
-                                                        isPayment -> Icons.Default.CallReceived
+                                                        isDueAdded -> Icons.AutoMirrored.Filled.CallMade
+                                                        isPayment -> Icons.AutoMirrored.Filled.CallReceived
                                                         else -> Icons.Default.Receipt
                                                     },
                                                     contentDescription = null,

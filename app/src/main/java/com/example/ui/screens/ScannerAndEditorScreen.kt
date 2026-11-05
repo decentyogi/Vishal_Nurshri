@@ -1,19 +1,22 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -26,7 +29,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -38,8 +40,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import com.example.data.model.CashMemoItem
 import com.example.data.model.CustomerProfileEntity
 import com.example.ui.CashMemoViewModel
@@ -51,8 +51,6 @@ import com.example.ui.theme.*
 import com.example.util.BitmapUtils
 import com.example.util.NumberToWordsConverter
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,29 +68,28 @@ fun ScannerAndEditorScreen(
 
     var showTextInputDialog by remember { mutableStateOf(false) }
     var roughTextPrompt by remember { mutableStateOf("") }
-    var showDemoPicker by remember { mutableStateOf(false) }
     var showPaymentCalculatorDialog by remember { mutableStateOf(false) }
     var showCustomerPickerDialog by remember { mutableStateOf(false) }
     var showAddCustomerDialog by remember { mutableStateOf(false) }
+    var showQuickUpiQrModal by remember { mutableStateOf(false) }
     var customerForHistoryDialog by remember { mutableStateOf<CustomerProfileEntity?>(null) }
 
-    // Camera Capture setup using FileProvider & BitmapUtils
+    // Camera Capture setup using FileProvider & BitmapUtils (downscaled to max 1024x1024 on Dispatchers.IO)
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && tempCameraImageUri != null) {
+        val capturedUri = tempCameraImageUri
+        if (success && capturedUri != null) {
             coroutineScope.launch {
-                try {
-                    val bitmap = BitmapUtils.decodeSampledBitmap(context, tempCameraImageUri!!)
-                    if (bitmap != null) {
-                        viewModel.analyzeRoughBillImage(bitmap)
-                    } else {
-                        Toast.makeText(context, "Could not process captured photo", Toast.LENGTH_SHORT).show()
+                val bitmap = BitmapUtils.decodeSampledBitmap(context, capturedUri)
+                if (bitmap != null) {
+                    viewModel.analyzeRoughBillImage(bitmap) { errMsg ->
+                        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Error reading image: ${e.message}", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Could not process captured photo", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -108,7 +105,6 @@ fun ScannerAndEditorScreen(
         }
     }
 
-    // Permission launcher for CAMERA
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -123,27 +119,25 @@ fun ScannerAndEditorScreen(
         }
     }
 
-    // Gallery Picker
+    // Gallery Picker (downscaled to max 1024x1024 on Dispatchers.IO)
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             coroutineScope.launch {
-                try {
-                    val bitmap = BitmapUtils.decodeSampledBitmap(context, uri)
-                    if (bitmap != null) {
-                        viewModel.analyzeRoughBillImage(bitmap)
-                    } else {
-                        Toast.makeText(context, "Could not load selected image", Toast.LENGTH_SHORT).show()
+                val bitmap = BitmapUtils.decodeSampledBitmap(context, uri)
+                if (bitmap != null) {
+                    viewModel.analyzeRoughBillImage(bitmap) { errMsg ->
+                        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Error loading image: ${e.message}", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Could not load selected image", Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
 
-    // Memoized computations
+    // Memoized computations to prevent recomposition overhead
     val subtotalFormatted = remember(editorState.subtotal) {
         String.format(Locale.ENGLISH, "₹ %.2f", editorState.subtotal)
     }
@@ -170,7 +164,7 @@ fun ScannerAndEditorScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
                             shape = CircleShape,
-                            color = MaroonPrimary.copy(alpha = 0.12f),
+                            color = MaroonContainer,
                             modifier = Modifier.size(38.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -191,7 +185,7 @@ fun ScannerAndEditorScreen(
                                 color = MaroonPrimary
                             )
                             Text(
-                                text = "Digital Cash Memo & Billing Studio",
+                                text = "Mob: ${businessProfile.phone} • Bill #${editorState.memoNumber}",
                                 fontSize = 11.5.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -199,6 +193,17 @@ fun ScannerAndEditorScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { showQuickUpiQrModal = true },
+                        modifier = Modifier.testTag("top_upi_qr_button")
+                    ) {
+                        Icon(
+                            Icons.Default.QrCode2,
+                            contentDescription = "UPI Payment QR",
+                            tint = MaroonPrimary
+                        )
+                    }
+
                     IconButton(
                         onClick = { showPaymentCalculatorDialog = true },
                         modifier = Modifier.testTag("top_payment_calc_button")
@@ -212,10 +217,12 @@ fun ScannerAndEditorScreen(
 
                     IconButton(
                         onClick = {
-                            val itemsJson = viewModel.exportCurrentMemoItemsJson()
-                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("CashMemoItems", itemsJson))
-                            Toast.makeText(context, "Copied active memo items JSON to clipboard!", Toast.LENGTH_SHORT).show()
+                            coroutineScope.launch {
+                                val itemsJson = viewModel.exportCurrentMemoItemsJson()
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("CashMemoItems", itemsJson))
+                                Toast.makeText(context, "Copied active memo items JSON to clipboard!", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     ) {
                         Icon(
@@ -245,18 +252,17 @@ fun ScannerAndEditorScreen(
         },
         bottomBar = {
             Surface(
-                tonalElevation = 8.dp,
-                shadowElevation = 10.dp,
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
                 color = MaterialTheme.colorScheme.surface
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Tappable Summary & Due Status in Bottom Bar
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -336,92 +342,54 @@ fun ScannerAndEditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 28.dp)
         ) {
-            // 1. PREMIUM HERO AI SCANNER BANNER
-            item(key = "scanner_card") {
-                Spacer(modifier = Modifier.height(4.dp))
+            // 1. AI SCANNER BANNER (Solid M3 Surface - zero gradient shader overdraw)
+            item(key = "scanner_card", contentType = "scanner_header") {
                 Card(
-                    shape = RoundedCornerShape(18.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaroonPrimary.copy(alpha = 0.2f))
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        MaroonContainer.copy(alpha = 0.45f),
-                                        MaterialTheme.colorScheme.surface
-                                    )
-                                )
-                            )
                             .padding(16.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = MaroonPrimary,
-                                    modifier = Modifier.size(38.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Default.DocumentScanner,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = "Smart Rough Bill Scanner",
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 15.5.sp,
-                                        color = MaroonPrimaryDark
-                                    )
-                                    Text(
-                                        text = "Scan handwritten slip or type notes to auto-fill",
-                                        fontSize = 11.5.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaroonPrimary,
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.DocumentScanner,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
-
-                            Surface(
-                                shape = RoundedCornerShape(20.dp),
-                                color = GoldContainer,
-                                border = BorderStroke(1.dp, GoldAccent.copy(alpha = 0.4f)),
-                                modifier = Modifier
-                                    .clickable { showDemoPicker = true }
-                                    .testTag("demo_samples_button")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        Icons.Default.Bolt,
-                                        contentDescription = null,
-                                        tint = GoldAccent,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = "Demo",
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF7A4F00)
-                                    )
-                                }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Smart Rough Bill Scanner (Gemini Flash)",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.sp,
+                                    color = MaroonPrimaryDark
+                                )
+                                Text(
+                                    text = "Scan handwritten slip or type notes to auto-fill items",
+                                    fontSize = 11.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
 
@@ -431,7 +399,6 @@ fun ScannerAndEditorScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Camera Button
                             Button(
                                 onClick = {
                                     val hasCameraPermission = ContextCompat.checkSelfPermission(
@@ -458,7 +425,6 @@ fun ScannerAndEditorScreen(
                                 Text("Camera", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // Gallery Button
                             FilledTonalButton(
                                 onClick = { galleryLauncher.launch("image/*") },
                                 modifier = Modifier
@@ -473,7 +439,6 @@ fun ScannerAndEditorScreen(
                                 Text("Gallery", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // Text Note Button
                             OutlinedButton(
                                 onClick = { showTextInputDialog = true },
                                 modifier = Modifier
@@ -494,7 +459,7 @@ fun ScannerAndEditorScreen(
 
             // AI Analyzing / Validation Feedback Cards
             if (editorState.isAnalyzing) {
-                item(key = "analyzing_card") {
+                item(key = "analyzing_card", contentType = "status_banner") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = GoldContainer),
                         shape = RoundedCornerShape(14.dp),
@@ -520,7 +485,7 @@ fun ScannerAndEditorScreen(
                                     color = InkTextPrimary
                                 )
                                 Text(
-                                    text = "Extracting customer, plant items, and totals automatically",
+                                    text = "Downscaling image & extracting items with Gemini Flash",
                                     fontSize = 11.5.sp,
                                     color = InkTextSecondary
                                 )
@@ -531,7 +496,7 @@ fun ScannerAndEditorScreen(
             }
 
             if (editorState.analysisError != null) {
-                item(key = "error_card") {
+                item(key = "error_card", contentType = "status_banner") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                         shape = RoundedCornerShape(14.dp)
@@ -547,15 +512,22 @@ fun ScannerAndEditorScreen(
                             Text(
                                 text = editorState.analysisError ?: "",
                                 fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onErrorContainer
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.weight(1f)
                             )
+                            IconButton(
+                                onClick = { viewModel.clearAnalysisError() },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss error", modifier = Modifier.size(16.dp))
+                            }
                         }
                     }
                 }
             }
 
             if (!editorState.aiValidationNote.isNullOrBlank() && !editorState.isAnalyzing) {
-                item(key = "validation_card") {
+                item(key = "validation_card", contentType = "status_banner") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = BotanicalGreenContainer),
                         shape = RoundedCornerShape(14.dp),
@@ -581,12 +553,12 @@ fun ScannerAndEditorScreen(
             }
 
             // 2. CUSTOMER & MEMO DETAILS CARD
-            item(key = "customer_memo_card") {
+            item(key = "customer_memo_card", contentType = "customer_section") {
                 Card(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Column(
                         modifier = Modifier
@@ -594,7 +566,6 @@ fun ScannerAndEditorScreen(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Section Header + Memo Number Badge
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -626,14 +597,14 @@ fun ScannerAndEditorScreen(
                                 CompactNumberInputBox(
                                     value = editorState.memoNumber,
                                     onValueChange = { viewModel.setMemoNumber(it) },
-                                    placeholder = "501",
+                                    placeholder = "1001",
                                     modifier = Modifier.width(82.dp),
                                     testTag = "memo_number_input"
                                 )
                             }
                         }
 
-                        // Saved Customer Quick Selector & Auto-Complete Bar
+                        // Saved Customer Selector (Only shows user-saved customers; 0 hardcoded entries)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -667,7 +638,7 @@ fun ScannerAndEditorScreen(
                                         val isSelected = editorState.customerName == cust.name && editorState.customerMobile == cust.phoneNumber
                                         Surface(
                                             shape = RoundedCornerShape(8.dp),
-                                            color = if (isSelected) MaroonContainer else if (cust.hasOutstandingBalance) DueCrimsonContainer.copy(alpha = 0.65f) else MaterialTheme.colorScheme.surfaceVariant,
+                                            color = if (isSelected) MaroonContainer else if (cust.hasOutstandingBalance) DueCrimsonContainer else MaterialTheme.colorScheme.surfaceVariant,
                                             border = BorderStroke(
                                                 1.dp,
                                                 if (isSelected) MaroonPrimary else if (cust.hasOutstandingBalance) DueCrimson.copy(alpha = 0.4f) else Color.Transparent
@@ -781,7 +752,7 @@ fun ScannerAndEditorScreen(
             }
 
             // 3. BILL ITEMS SECTION HEADER
-            item(key = "items_header") {
+            item(key = "items_header", contentType = "section_header") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -834,14 +805,13 @@ fun ScannerAndEditorScreen(
                 }
             }
 
-            // 4. BILL ITEM CARDS
+            // 4. BILL ITEM CARDS (Stable item IDs + contentType for 60/120fps scrolling)
             itemsIndexed(
                 items = editorState.items,
                 key = { _, item -> item.id },
                 contentType = { _, _ -> "bill_item" }
             ) { index, item ->
                 BillItemCard(
-                    index = index,
                     item = item,
                     canDelete = editorState.items.size > 1,
                     onUpdate = { desc, q, r -> viewModel.updateItem(index, desc, q, r) },
@@ -852,12 +822,12 @@ fun ScannerAndEditorScreen(
             }
 
             // 5. SUMMARY & TOTALS SECTION + PAYMENT & NEXT-DAY BALANCE CALCULATOR
-            item(key = "calculations_card") {
+            item(key = "calculations_card", contentType = "totals_footer") {
                 Card(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-                    border = BorderStroke(1.2.dp, MaroonPrimary.copy(alpha = 0.25f))
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    border = BorderStroke(1.dp, MaroonPrimary.copy(alpha = 0.25f))
                 ) {
                     Column(
                         modifier = Modifier
@@ -865,7 +835,6 @@ fun ScannerAndEditorScreen(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Header Row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -994,7 +963,7 @@ fun ScannerAndEditorScreen(
                         // GRAND TOTAL / TOTAL PAYABLE HIGHLIGHT BANNER
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = MaroonContainer.copy(alpha = 0.55f),
+                            color = MaroonContainer,
                             border = BorderStroke(1.dp, MaroonPrimary.copy(alpha = 0.3f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1037,23 +1006,19 @@ fun ScannerAndEditorScreen(
                                 Text(
                                     text = "शब्दों में: $grandTotalWords",
                                     fontSize = 11.5.sp,
-                                    color = MaroonPrimaryDark.copy(alpha = 0.85f),
+                                    color = MaroonPrimaryDark,
                                     fontStyle = FontStyle.Italic,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
                         }
 
-                        // NEW: DEDICATED PAID & NEXT-DAY BALANCE SECTION INSIDE SUMMARY & TOTALS
+                        // PAID & NEXT-DAY BALANCE SECTION INSIDE SUMMARY & TOTALS
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = if (editorState.balanceDue > 0.009) {
-                                DueCrimsonContainer.copy(alpha = 0.5f)
-                            } else {
-                                BotanicalGreenContainer.copy(alpha = 0.5f)
-                            },
+                            color = if (editorState.balanceDue > 0.009) DueCrimsonContainer else BotanicalGreenContainer,
                             border = BorderStroke(
-                                1.5.dp,
+                                1.2.dp,
                                 if (editorState.balanceDue > 0.009) DueCrimson.copy(alpha = 0.45f)
                                 else BotanicalGreen.copy(alpha = 0.45f)
                             ),
@@ -1114,12 +1079,11 @@ fun ScannerAndEditorScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+                                        .background(Color.White, RoundedCornerShape(12.dp))
                                         .padding(vertical = 10.dp, horizontal = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceEvenly,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    // Total
                                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = "Total Bill (कुल)",
@@ -1143,7 +1107,6 @@ fun ScannerAndEditorScreen(
                                             .background(MaterialTheme.colorScheme.outlineVariant)
                                     )
 
-                                    // Paid Now
                                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = "Paid Now (जमा)",
@@ -1168,7 +1131,6 @@ fun ScannerAndEditorScreen(
                                             .background(MaterialTheme.colorScheme.outlineVariant)
                                     )
 
-                                    // Balance Due
                                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = "Rest Due (बकाया)",
@@ -1187,11 +1149,10 @@ fun ScannerAndEditorScreen(
                                     }
                                 }
 
-                                // Promise Date / Next Day Banner when balance > 0
                                 if (editorState.balanceDue > 0.009) {
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
-                                        color = DueCrimson.copy(alpha = 0.1f),
+                                        color = Color.White,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Row(
@@ -1224,38 +1185,62 @@ fun ScannerAndEditorScreen(
                                     }
                                 }
 
-                                // Button to Open Payment & Balance Calculator Dialog
-                                Button(
-                                    onClick = { showPaymentCalculatorDialog = true },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (editorState.balanceDue > 0.009) DueCrimson else MaroonPrimary
-                                    ),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(46.dp)
-                                        .testTag("open_payment_calculator_button")
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Calculate,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(19.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Calculate Paid & Next-Day Balance (जमा / बकाया डायलॉग)",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
+                                    Button(
+                                        onClick = { showPaymentCalculatorDialog = true },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (editorState.balanceDue > 0.009) DueCrimson else MaroonPrimary
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .weight(1.3f)
+                                            .height(46.dp)
+                                            .testTag("open_payment_calculator_button")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Calculate,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Calculate Paid / Due",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.5.sp
+                                        )
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { showQuickUpiQrModal = true },
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = BorderStroke(1.5.dp, MaroonPrimary),
+                                        modifier = Modifier
+                                            .weight(0.9f)
+                                            .height(46.dp)
+                                            .testTag("summary_show_upi_qr_button")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.QrCode2,
+                                            contentDescription = null,
+                                            tint = MaroonPrimary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "UPI QR",
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 12.5.sp,
+                                            color = MaroonPrimary
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-
-            item(key = "bottom_spacer") {
-                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }
@@ -1286,6 +1271,19 @@ fun ScannerAndEditorScreen(
             onResetToFullPaid = {
                 viewModel.resetCustomPayment()
             }
+        )
+    }
+
+    // QUICK FULL-SCREEN UPI QR MODAL (Defaults to current bill's payable/paid amount)
+    if (showQuickUpiQrModal) {
+        val defaultQrAmount = if (editorState.hasCustomPayment && editorState.paidAmount > 0.0) {
+            editorState.paidAmount
+        } else {
+            editorState.totalPayable.takeIf { it > 0.0 }
+        }
+        FullScreenUpiQrDialog(
+            initialAmount = defaultQrAmount,
+            onDismiss = { showQuickUpiQrModal = false }
         )
     }
 
@@ -1365,7 +1363,7 @@ fun ScannerAndEditorScreen(
             text = {
                 Column {
                     Text(
-                        text = "Enter raw notes (e.g. '10 rose @ 40, 2 pot @ 100, Ramesh 9876543210')",
+                        text = "Enter raw notes (e.g. '10 rose @ 40, 2 pot @ 100')",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1385,7 +1383,9 @@ fun ScannerAndEditorScreen(
                 Button(
                     onClick = {
                         if (roughTextPrompt.isNotBlank()) {
-                            viewModel.analyzeRoughBillText(roughTextPrompt)
+                            viewModel.analyzeRoughBillText(roughTextPrompt) { errMsg ->
+                                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+                            }
                             showTextInputDialog = false
                         }
                     },
@@ -1401,71 +1401,13 @@ fun ScannerAndEditorScreen(
             }
         )
     }
-
-    // Demo samples dialog
-    if (showDemoPicker) {
-        AlertDialog(
-            onDismissRequest = { showDemoPicker = false },
-            title = { Text("Try Sample Rough Bills", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Select a sample rough bill to test automatic item detection and calculation validation:", fontSize = 13.sp)
-
-                    FilledTonalButton(
-                        onClick = {
-                            viewModel.loadSampleRoughBill(1)
-                            showDemoPicker = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("1. Ramesh Kumar (Plants & Vermicompost)", fontWeight = FontWeight.Bold)
-                            Text("Rose, Marigold, Croton, 12\" Pot, Compost", fontSize = 11.sp)
-                        }
-                    }
-
-                    FilledTonalButton(
-                        onClick = {
-                            viewModel.loadSampleRoughBill(2)
-                            showDemoPicker = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("2. Anita Devi (Fruit Trees & Planters)", fontWeight = FontWeight.Bold)
-                            Text("Mango Amrapali, Guava, Hibiscus, Planter", fontSize = 11.sp)
-                        }
-                    }
-
-                    FilledTonalButton(
-                        onClick = {
-                            viewModel.loadSampleRoughBill(3)
-                            showDemoPicker = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("3. Math Error Correction Test", fontWeight = FontWeight.Bold)
-                            Text("Has 5 x 60 = 350 mistake. AI fixes to 300!", fontSize = 11.sp)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showDemoPicker = false }) {
-                    Text("Close")
-                }
-            }
-        )
-    }
 }
 
 /**
- * Isolated Composable for individual Bill Item with sleek modern layout and stepper controls.
+ * Isolated Composable for individual Bill Item with zero nested layout weight overdraw.
  */
 @Composable
 private fun BillItemCard(
-    index: Int,
     item: CashMemoItem,
     canDelete: Boolean,
     onUpdate: (String, Double, Double) -> Unit,
@@ -1480,8 +1422,8 @@ private fun BillItemCard(
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -1490,7 +1432,6 @@ private fun BillItemCard(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Header: Serial number badge, Calculated Amount Pill, Delete button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1562,7 +1503,6 @@ private fun BillItemCard(
                 }
             }
 
-            // Description Field
             OutlinedTextField(
                 value = item.description,
                 onValueChange = { newDesc ->
@@ -1578,13 +1518,11 @@ private fun BillItemCard(
                 }
             )
 
-            // Qty (with +/- buttons) and Rate Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
-                // Quantity with quick [-] and [+] buttons
                 Column(modifier = Modifier.weight(1.1f)) {
                     Text(
                         text = "संख्या (Qty)",
@@ -1634,7 +1572,6 @@ private fun BillItemCard(
                     }
                 }
 
-                // Rate
                 Column(modifier = Modifier.weight(0.95f)) {
                     Text(
                         text = "दाम (Rate ₹)",
@@ -1660,10 +1597,6 @@ private fun BillItemCard(
     }
 }
 
-/**
- * Compact numeric input box using BasicTextField with a dedicated Surface container.
- * Guarantees numbers are centered vertically and never clipped.
- */
 @Composable
 private fun CompactNumberInputBox(
     value: String,
@@ -1722,7 +1655,7 @@ private fun CompactNumberInputBox(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
                                 fontSize = 14.sp,
                                 textAlign = TextAlign.End,
-                                modifier = Modifier.fillMaxWidth()
+                                maxLines = 1
                             )
                         }
                         innerTextField()

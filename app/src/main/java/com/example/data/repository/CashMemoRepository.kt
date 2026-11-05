@@ -11,11 +11,19 @@ import com.example.data.model.CashMemoItem
 import com.example.data.model.CustomerBalanceHistoryEntity
 import com.example.data.model.CustomerProfileEntity
 import com.example.data.model.PlantRateEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
+/**
+ * Repository managing Room database entities and BusinessProfile preferences.
+ * All disk I/O, database mutations, and JSON serialization are strictly dispatched on Dispatchers.IO.
+ */
 class CashMemoRepository(
     private val cashMemoDao: CashMemoDao,
     private val plantRateDao: PlantRateDao,
@@ -23,15 +31,16 @@ class CashMemoRepository(
     context: Context
 ) {
     private val prefs: SharedPreferences =
-        context.getSharedPreferences("cashmemo_business_prefs", Context.MODE_PRIVATE)
+        context.applicationContext.getSharedPreferences("cashmemo_business_prefs", Context.MODE_PRIVATE)
 
     val allCashMemos: Flow<List<CashMemoEntity>> = cashMemoDao.getAllCashMemos()
 
     fun searchMemos(query: String): Flow<List<CashMemoEntity>> =
         cashMemoDao.searchCashMemos(query)
 
-    suspend fun getMemoById(id: Long): CashMemoEntity? =
+    suspend fun getMemoById(id: Long): CashMemoEntity? = withContext(Dispatchers.IO) {
         cashMemoDao.getCashMemoById(id)
+    }
 
     // Customer Profiles & Outstanding Balance History
     val allCustomers: Flow<List<CustomerProfileEntity>> = customerDao.getAllCustomers()
@@ -44,19 +53,20 @@ class CashMemoRepository(
     fun getCustomerBalanceHistory(customerId: Long): Flow<List<CustomerBalanceHistoryEntity>> =
         customerDao.getBalanceHistoryForCustomer(customerId)
 
-    suspend fun findMatchingCustomer(phone: String, name: String): CustomerProfileEntity? {
-        val cleanPhone = phone.trim()
-        val cleanName = name.trim()
-        if (cleanPhone.isNotBlank()) {
-            customerDao.getCustomerByPhone(cleanPhone)?.let { return it }
+    suspend fun findMatchingCustomer(phone: String, name: String): CustomerProfileEntity? =
+        withContext(Dispatchers.IO) {
+            val cleanPhone = phone.trim()
+            val cleanName = name.trim()
+            if (cleanPhone.isNotBlank()) {
+                customerDao.getCustomerByPhone(cleanPhone)?.let { return@withContext it }
+            }
+            if (cleanName.isNotBlank()) {
+                customerDao.getCustomerByName(cleanName)?.let { return@withContext it }
+            }
+            null
         }
-        if (cleanName.isNotBlank()) {
-            customerDao.getCustomerByName(cleanName)?.let { return it }
-        }
-        return null
-    }
 
-    suspend fun saveMemo(memo: CashMemoEntity): Long {
+    suspend fun saveMemo(memo: CashMemoEntity): Long = withContext(Dispatchers.IO) {
         val id = cashMemoDao.insertCashMemo(memo)
         try {
             val num = memo.memoNumber.filter { it.isDigit() }.toIntOrNull()
@@ -70,13 +80,13 @@ class CashMemoRepository(
 
         // Automatically sync customer profile & balance history when customer info is present
         syncCustomerOnMemoSaved(memo.copy(id = id))
-        return id
+        id
     }
 
-    private suspend fun syncCustomerOnMemoSaved(memo: CashMemoEntity) {
+    private suspend fun syncCustomerOnMemoSaved(memo: CashMemoEntity) = withContext(Dispatchers.IO) {
         val cleanName = memo.customerName.trim()
         val cleanPhone = memo.customerMobile.trim()
-        if (cleanName.isBlank() && cleanPhone.isBlank()) return
+        if (cleanName.isBlank() && cleanPhone.isBlank()) return@withContext
 
         val displayName = cleanName.ifBlank { "Customer ($cleanPhone)" }
         val existing = findMatchingCustomer(cleanPhone, displayName)
@@ -87,8 +97,6 @@ class CashMemoRepository(
 
         val now = System.currentTimeMillis()
         if (existing != null) {
-            // If memo already included previousDues >= existing.outstandingBalance, newBalanceFromMemo is the new total balance;
-            // otherwise add current unpaid delta to existing balance.
             val newOutstanding = if (memo.previousDues >= existing.outstandingBalance && existing.outstandingBalance > 0.0) {
                 newBalanceFromMemo
             } else {
@@ -122,9 +130,9 @@ class CashMemoRepository(
                     resultingBalance = newOutstanding,
                     paymentMethod = memo.paymentMethod,
                     note = if (newOutstanding > 0.009) {
-                        "Bill #${memo.memoNumber}: Paid ₹${String.format("%.0f", paidNow)} of ₹${String.format("%.0f", memo.totalPayableWithDues)} • Rest ₹${String.format("%.0f", newOutstanding)} (${memo.paymentStatusNote.ifBlank { "Next Day" }})"
+                        "Bill #${memo.memoNumber}: Paid ₹${String.format(Locale.ENGLISH, "%.0f", paidNow)} of ₹${String.format(Locale.ENGLISH, "%.0f", memo.totalPayableWithDues)} • Rest ₹${String.format(Locale.ENGLISH, "%.0f", newOutstanding)} (${memo.paymentStatusNote.ifBlank { "Next Day" }})"
                     } else {
-                        "Bill #${memo.memoNumber}: Full Payment ₹${String.format("%.0f", paidNow)}"
+                        "Bill #${memo.memoNumber}: Full Payment ₹${String.format(Locale.ENGLISH, "%.0f", paidNow)}"
                     },
                     timestamp = now
                 )
@@ -157,9 +165,9 @@ class CashMemoRepository(
                     resultingBalance = newBalanceFromMemo,
                     paymentMethod = memo.paymentMethod,
                     note = if (newBalanceFromMemo > 0.009) {
-                        "Bill #${memo.memoNumber}: Paid ₹${String.format("%.0f", paidNow)} of ₹${String.format("%.0f", memo.totalPayableWithDues)} • Rest ₹${String.format("%.0f", newBalanceFromMemo)} (${memo.paymentStatusNote.ifBlank { "Next Day" }})"
+                        "Bill #${memo.memoNumber}: Paid ₹${String.format(Locale.ENGLISH, "%.0f", paidNow)} of ₹${String.format(Locale.ENGLISH, "%.0f", memo.totalPayableWithDues)} • Rest ₹${String.format(Locale.ENGLISH, "%.0f", newBalanceFromMemo)} (${memo.paymentStatusNote.ifBlank { "Next Day" }})"
                     } else {
-                        "Bill #${memo.memoNumber}: Full Payment ₹${String.format("%.0f", paidNow)}"
+                        "Bill #${memo.memoNumber}: Full Payment ₹${String.format(Locale.ENGLISH, "%.0f", paidNow)}"
                     },
                     timestamp = now
                 )
@@ -170,7 +178,7 @@ class CashMemoRepository(
     suspend fun updateMemoPaymentAndSyncCustomer(
         oldMemo: CashMemoEntity,
         updatedMemo: CashMemoEntity
-    ) {
+    ) = withContext(Dispatchers.IO) {
         cashMemoDao.updateCashMemo(updatedMemo)
 
         val additionalPaid = updatedMemo.effectivePaidAmount - oldMemo.effectivePaidAmount
@@ -203,9 +211,9 @@ class CashMemoRepository(
                     resultingBalance = newOutstanding,
                     paymentMethod = updatedMemo.paymentMethod,
                     note = if (newOutstanding <= 0.009) {
-                        "Settled Bill #${updatedMemo.memoNumber} • Total Paid ₹${String.format("%.0f", updatedMemo.effectivePaidAmount)}"
+                        "Settled Bill #${updatedMemo.memoNumber} • Total Paid ₹${String.format(Locale.ENGLISH, "%.0f", updatedMemo.effectivePaidAmount)}"
                     } else {
-                        "Updated Bill #${updatedMemo.memoNumber} • Paid ₹${String.format("%.0f", updatedMemo.effectivePaidAmount)}, Remaining ₹${String.format("%.0f", newOutstanding)} (${updatedMemo.paymentStatusNote})"
+                        "Updated Bill #${updatedMemo.memoNumber} • Paid ₹${String.format(Locale.ENGLISH, "%.0f", updatedMemo.effectivePaidAmount)}, Remaining ₹${String.format(Locale.ENGLISH, "%.0f", newOutstanding)} (${updatedMemo.paymentStatusNote})"
                     },
                     timestamp = now
                 )
@@ -220,11 +228,11 @@ class CashMemoRepository(
         address: String,
         outstandingBalance: Double,
         promiseNote: String
-    ): Long {
+    ): Long = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val existing = if (id > 0) customerDao.getCustomerById(id) else findMatchingCustomer(phoneNumber, name)
 
-        return if (existing != null) {
+        if (existing != null) {
             val balanceDelta = outstandingBalance - existing.outstandingBalance
             val updated = existing.copy(
                 name = name.trim(),
@@ -236,7 +244,7 @@ class CashMemoRepository(
             )
             customerDao.updateCustomer(updated)
 
-            if (kotlin.math.abs(balanceDelta) > 0.009) {
+            if (abs(balanceDelta) > 0.009) {
                 customerDao.insertBalanceHistory(
                     CustomerBalanceHistoryEntity(
                         customerId = existing.id,
@@ -251,7 +259,7 @@ class CashMemoRepository(
                         note = if (updated.outstandingBalance <= 0.009) {
                             "Full balance settled (चुकता)"
                         } else {
-                            "Balance updated to ₹${String.format("%.0f", updated.outstandingBalance)} (${updated.lastPromiseNote})"
+                            "Balance updated to ₹${String.format(Locale.ENGLISH, "%.0f", updated.outstandingBalance)} (${updated.lastPromiseNote})"
                         },
                         timestamp = now
                     )
@@ -283,7 +291,7 @@ class CashMemoRepository(
                         balanceChange = outstandingBalance,
                         resultingBalance = outstandingBalance,
                         paymentMethod = "Cash",
-                        note = "Opening balance ₹${String.format("%.0f", outstandingBalance)} (${profile.lastPromiseNote})",
+                        note = "Opening balance ₹${String.format(Locale.ENGLISH, "%.0f", outstandingBalance)} (${profile.lastPromiseNote})",
                         timestamp = now
                     )
                 )
@@ -297,7 +305,7 @@ class CashMemoRepository(
         amountReceivedNow: Double,
         paymentMethod: String,
         remainingPromiseNote: String
-    ) {
+    ) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val newBalance = max(0.0, customer.outstandingBalance - amountReceivedNow)
         val updatedCustomer = customer.copy(
@@ -320,162 +328,104 @@ class CashMemoRepository(
                 resultingBalance = newBalance,
                 paymentMethod = paymentMethod,
                 note = if (newBalance <= 0.009) {
-                    "Received ₹${String.format("%.0f", amountReceivedNow)} ($paymentMethod) • All dues settled (चुकता)"
+                    "Received ₹${String.format(Locale.ENGLISH, "%.0f", amountReceivedNow)} ($paymentMethod) • All dues settled (चुकता)"
                 } else {
-                    "Received ₹${String.format("%.0f", amountReceivedNow)} ($paymentMethod) • Remaining ₹${String.format("%.0f", newBalance)} ($remainingPromiseNote)"
+                    "Received ₹${String.format(Locale.ENGLISH, "%.0f", amountReceivedNow)} ($paymentMethod) • Remaining ₹${String.format(Locale.ENGLISH, "%.0f", newBalance)} ($remainingPromiseNote)"
                 },
                 timestamp = now
             )
         )
     }
 
-    suspend fun deleteCustomer(customerId: Long) {
+    suspend fun deleteCustomer(customerId: Long) = withContext(Dispatchers.IO) {
         customerDao.deleteHistoryForCustomer(customerId)
         customerDao.deleteCustomer(customerId)
     }
 
-    suspend fun syncCustomersFromExistingMemosIfEmpty() {
-        if (customerDao.getCustomerCount() == 0) {
-            val memos = cashMemoDao.getAllCashMemosList().sortedBy { it.createdAt }
-            if (memos.isNotEmpty()) {
-                for (memo in memos) {
-                    syncCustomerOnMemoSaved(memo)
-                }
+    /**
+     * Ensures a completely clean state on fresh install and wipes any previously injected
+     * mock/seed records (dummy customers like Ramesh/Anita or pre-populated plant rates).
+     */
+    suspend fun ensureCleanFreshState() = withContext(Dispatchers.IO) {
+        val hasPurgedSeed = prefs.getBoolean("clean_state_v5_purged", false)
+        if (!hasPurgedSeed) {
+            // Remove any pre-populated dummy customers (e.g., Ramesh Kumar / Anita Devi) if no real bills exist
+            val allMemos = cashMemoDao.getAllCashMemosList()
+            if (allMemos.isEmpty()) {
+                customerDao.deleteAllBalanceHistory()
+                customerDao.deleteAllCustomers()
+                plantRateDao.deleteAllRates()
             } else {
-                // Seed realistic nursery customer profiles with sample balance history so workflow is ready immediately
-                val now = System.currentTimeMillis()
-                val sampleCustomer1 = CustomerProfileEntity(
-                    name = "रमेश कुमार (Ramesh Kumar)",
-                    phoneNumber = "9835123456",
-                    address = "सासाराम (रोहतास)",
-                    outstandingBalance = 200.0,
-                    totalPurchased = 1000.0,
-                    totalPaid = 800.0,
-                    lastPromiseNote = "Next Day (कल देगा)",
-                    lastTransactionAt = now - 3600_000L
-                )
-                val id1 = customerDao.insertCustomer(sampleCustomer1)
-                customerDao.insertBalanceHistory(
-                    CustomerBalanceHistoryEntity(
-                        customerId = id1,
-                        customerName = sampleCustomer1.name,
-                        customerPhone = sampleCustomer1.phoneNumber,
-                        memoNumber = "500",
-                        transactionType = "BILL_CREATED",
-                        billAmount = 1000.0,
-                        paidAmount = 800.0,
-                        balanceChange = 200.0,
-                        resultingBalance = 200.0,
-                        paymentMethod = "Cash",
-                        note = "Bought plants worth ₹1000, paid ₹800 • Rest ₹200 Next Day (कल देगा)",
-                        timestamp = now - 3600_000L
-                    )
-                )
-
-                val sampleCustomer2 = CustomerProfileEntity(
-                    name = "अनीता देवी (Anita Devi)",
-                    phoneNumber = "7004128990",
-                    address = "डेहरी ऑन सोन",
-                    outstandingBalance = 0.0,
-                    totalPurchased = 650.0,
-                    totalPaid = 650.0,
-                    lastPromiseNote = "Fully Paid (चुकता)",
-                    lastTransactionAt = now - 86400_000L
-                )
-                val id2 = customerDao.insertCustomer(sampleCustomer2)
-                customerDao.insertBalanceHistory(
-                    CustomerBalanceHistoryEntity(
-                        customerId = id2,
-                        customerName = sampleCustomer2.name,
-                        customerPhone = sampleCustomer2.phoneNumber,
-                        memoNumber = "499",
-                        transactionType = "BILL_CREATED",
-                        billAmount = 650.0,
-                        paidAmount = 650.0,
-                        balanceChange = 0.0,
-                        resultingBalance = 0.0,
-                        paymentMethod = "UPI",
-                        note = "Bill #499: Full Payment ₹650 via UPI",
-                        timestamp = now - 86400_000L
-                    )
-                )
+                // Specifically delete the two legacy mock customers if present
+                val allCust = customerDao.getAllCustomersList()
+                for (c in allCust) {
+                    if (c.phoneNumber == "9835123456" || c.phoneNumber == "7004128990" ||
+                        c.name.contains("Anita Devi", ignoreCase = true) ||
+                        c.name.contains("अनीता देवी")
+                    ) {
+                        customerDao.deleteHistoryForCustomer(c.id)
+                        customerDao.deleteCustomer(c.id)
+                    }
+                }
             }
+            prefs.edit().putBoolean("clean_state_v5_purged", true).apply()
         }
     }
 
-    suspend fun updateMemo(memo: CashMemoEntity) {
+    suspend fun updateMemo(memo: CashMemoEntity) = withContext(Dispatchers.IO) {
         cashMemoDao.updateCashMemo(memo)
     }
 
-    suspend fun deleteMemo(id: Long) = cashMemoDao.deleteCashMemo(id)
+    suspend fun deleteMemo(id: Long) = withContext(Dispatchers.IO) {
+        cashMemoDao.deleteCashMemo(id)
+    }
 
-    // Plant Rate Catalog operations
+    // Plant Rate Catalog operations (starts empty on fresh install; no dummy rates injected)
     val allRates: Flow<List<PlantRateEntity>> = plantRateDao.getAllRates()
 
     fun searchRates(query: String): Flow<List<PlantRateEntity>> =
         plantRateDao.searchRates(query)
 
-    suspend fun saveRate(rate: PlantRateEntity): Long =
+    suspend fun saveRate(rate: PlantRateEntity): Long = withContext(Dispatchers.IO) {
         plantRateDao.insertRate(rate)
+    }
 
-    suspend fun updateRate(rate: PlantRateEntity) =
+    suspend fun updateRate(rate: PlantRateEntity) = withContext(Dispatchers.IO) {
         plantRateDao.updateRate(rate)
+    }
 
-    suspend fun deleteRate(id: Long) =
+    suspend fun deleteRate(id: Long) = withContext(Dispatchers.IO) {
         plantRateDao.deleteRate(id)
+    }
 
-    suspend fun populateDefaultRatesIfEmpty() {
-        if (plantRateDao.getRateCount() == 0) {
-            val defaultRates = listOf(
-                PlantRateEntity(name = "गुलाब (Red Rose Plant)", retailPrice = 30.0, wholesalePrice = 18.0),
-                PlantRateEntity(name = "गेंदा (Marigold Plant)", retailPrice = 15.0, wholesalePrice = 8.0),
-                PlantRateEntity(name = "गुलदावदी (Chrysanthemum)", retailPrice = 35.0, wholesalePrice = 20.0),
-                PlantRateEntity(name = "गुलमोहर (Gulmohar Tree)", retailPrice = 40.0, wholesalePrice = 22.0),
-                PlantRateEntity(name = "गुलमेहंदी (Balsam Flower)", retailPrice = 20.0, wholesalePrice = 12.0),
-                PlantRateEntity(name = "आम्रपाली आम (Mango Amrapali)", retailPrice = 120.0, wholesalePrice = 75.0),
-                PlantRateEntity(name = "अमरूद (Guava L-49)", retailPrice = 80.0, wholesalePrice = 50.0),
-                PlantRateEntity(name = "गुड़हल (Hibiscus Hybrid)", retailPrice = 45.0, wholesalePrice = 28.0),
-                PlantRateEntity(name = "बोगनवेलिया (Bougainvillea)", retailPrice = 60.0, wholesalePrice = 35.0),
-                PlantRateEntity(name = "क्रोटन इंडोर (Croton Indoor)", retailPrice = 90.0, wholesalePrice = 55.0),
-                PlantRateEntity(name = "मनी प्लांट (Money Plant Stick)", retailPrice = 80.0, wholesalePrice = 50.0),
-                PlantRateEntity(name = "मिट्टी का गमला 10 इंच (Clay Pot 10\")", retailPrice = 60.0, wholesalePrice = 38.0),
-                PlantRateEntity(name = "मिट्टी का गमला 12 इंच (Clay Pot 12\")", retailPrice = 85.0, wholesalePrice = 55.0),
-                PlantRateEntity(name = "सिरेमिक गमला (Ceramic Planter)", retailPrice = 180.0, wholesalePrice = 120.0),
-                PlantRateEntity(name = "वर्मीकम्पोस्ट खाद 5kg (Vermicompost)", retailPrice = 70.0, wholesalePrice = 45.0),
-                PlantRateEntity(name = "नीम खली खाद 1kg (Neem Khali)", retailPrice = 45.0, wholesalePrice = 30.0)
-            )
-            plantRateDao.insertRates(defaultRates)
+    suspend fun getAllRatesDirectly(): List<PlantRateEntity> = withContext(Dispatchers.IO) {
+        plantRateDao.getAllRatesList()
+    }
+
+    suspend fun getAllCashMemosDirectly(): List<CashMemoEntity> = withContext(Dispatchers.IO) {
+        cashMemoDao.getAllCashMemosList()
+    }
+
+    suspend fun getAllCustomersDirectly(): List<CustomerProfileEntity> = withContext(Dispatchers.IO) {
+        customerDao.getAllCustomersList()
+    }
+
+    suspend fun exportRatesJson(ratesList: List<PlantRateEntity>? = null): String =
+        withContext(Dispatchers.IO) {
+            val list = if (!ratesList.isNullOrEmpty()) ratesList else getAllRatesDirectly()
+            val array = JSONArray()
+            for (r in list) {
+                val obj = JSONObject()
+                obj.put("name", r.name)
+                obj.put("retailPrice", r.retailPrice)
+                obj.put("wholesalePrice", r.wholesalePrice)
+                obj.put("category", r.category)
+                array.put(obj)
+            }
+            array.toString(2)
         }
-    }
 
-    suspend fun getAllRatesDirectly(): List<PlantRateEntity> {
-        populateDefaultRatesIfEmpty()
-        return plantRateDao.getAllRatesList()
-    }
-
-    suspend fun getAllCashMemosDirectly(): List<CashMemoEntity> {
-        return cashMemoDao.getAllCashMemosList()
-    }
-
-    suspend fun getAllCustomersDirectly(): List<CustomerProfileEntity> {
-        return customerDao.getAllCustomersList()
-    }
-
-    suspend fun exportRatesJson(ratesList: List<PlantRateEntity>? = null): String {
-        val list = if (!ratesList.isNullOrEmpty()) ratesList else getAllRatesDirectly()
-        val array = JSONArray()
-        for (r in list) {
-            val obj = JSONObject()
-            obj.put("name", r.name)
-            obj.put("retailPrice", r.retailPrice)
-            obj.put("wholesalePrice", r.wholesalePrice)
-            obj.put("category", r.category)
-            array.put(obj)
-        }
-        return array.toString(2)
-    }
-
-    suspend fun importRatesJson(jsonString: String): Int {
+    suspend fun importRatesJson(jsonString: String): Int = withContext(Dispatchers.IO) {
         val trimmed = jsonString.trim()
         val array: JSONArray = if (trimmed.startsWith("[")) {
             JSONArray(trimmed)
@@ -488,7 +438,7 @@ class CashMemoRepository(
                 else -> JSONArray().apply { put(obj) }
             }
         } else {
-            return 0
+            return@withContext 0
         }
 
         val list = mutableListOf<PlantRateEntity>()
@@ -511,10 +461,10 @@ class CashMemoRepository(
         if (list.isNotEmpty()) {
             plantRateDao.insertRates(list)
         }
-        return list.size
+        list.size
     }
 
-    suspend fun exportAllMemosJson(): String {
+    suspend fun exportAllMemosJson(): String = withContext(Dispatchers.IO) {
         val memos = getAllCashMemosDirectly()
         val array = JSONArray()
         for (m in memos) {
@@ -540,10 +490,10 @@ class CashMemoRepository(
             obj.put("createdAt", m.createdAt)
             array.put(obj)
         }
-        return array.toString(2)
+        array.toString(2)
     }
 
-    suspend fun importMemosJson(jsonString: String): Int {
+    suspend fun importMemosJson(jsonString: String): Int = withContext(Dispatchers.IO) {
         val trimmed = jsonString.trim()
         val array: JSONArray = if (trimmed.startsWith("[")) {
             JSONArray(trimmed)
@@ -555,7 +505,7 @@ class CashMemoRepository(
                 else -> JSONArray().apply { put(obj) }
             }
         } else {
-            return 0
+            return@withContext 0
         }
 
         var count = 0
@@ -568,7 +518,7 @@ class CashMemoRepository(
             val balance = if (obj.has("balanceDue")) obj.optDouble("balanceDue", 0.0) else max(0.0, totalPayable - paid)
 
             val memo = CashMemoEntity(
-                memoNumber = obj.optString("memoNumber", "501"),
+                memoNumber = obj.optString("memoNumber", "1001"),
                 customerName = obj.optString("customerName", ""),
                 customerMobile = obj.optString("customerMobile", ""),
                 customerAddress = obj.optString("customerAddress", ""),
@@ -590,10 +540,36 @@ class CashMemoRepository(
             syncCustomerOnMemoSaved(memo.copy(id = id))
             count++
         }
-        return count
+        count
     }
 
     fun getBusinessProfile(): BusinessProfile {
+        val rawPhone = prefs.getString("phone", "7631873743") ?: "7631873743"
+        val correctedPhone = if (rawPhone == "7631073743" || rawPhone.isBlank()) "7631873743" else rawPhone
+
+        val defaultAddr1 = "ग्राम-कोटा, माँ ताराचण्डी रोड (माँ सीताराम मंदिर)"
+        val rawAddr1 = prefs.getString("addressLine1", defaultAddr1) ?: defaultAddr1
+        val correctedAddr1 = if (rawAddr1.contains("ग्राम-बेदा") || rawAddr1.isBlank()) defaultAddr1 else rawAddr1
+
+        val defaultAddr2 = "पो०-सासाराम (रोहतास)"
+        val rawAddr2 = prefs.getString("addressLine2", defaultAddr2) ?: defaultAddr2
+
+        val rawNextNum = prefs.getInt("nextMemoNumber", 1001)
+        val correctedNextNum = if (rawNextNum < 1001) 1001 else rawNextNum
+
+        val rawModel = prefs.getString("selectedAiModel", "gemini-2.5-flash") ?: "gemini-2.5-flash"
+        val correctedModel = if (rawModel.startsWith("gemini-3.")) "gemini-2.5-flash" else rawModel
+
+        // Persist migrated defaults if they were outdated
+        if (rawPhone != correctedPhone || rawAddr1 != correctedAddr1 || rawNextNum != correctedNextNum || rawModel != correctedModel) {
+            prefs.edit()
+                .putString("phone", correctedPhone)
+                .putString("addressLine1", correctedAddr1)
+                .putInt("nextMemoNumber", correctedNextNum)
+                .putString("selectedAiModel", correctedModel)
+                .apply()
+        }
+
         return BusinessProfile(
             shopNameHindi = prefs.getString("shopNameHindi", "विशाल नर्सरी") ?: "विशाल नर्सरी",
             shopNameEnglish = prefs.getString("shopNameEnglish", "Vishal Nursery") ?: "Vishal Nursery",
@@ -601,22 +577,16 @@ class CashMemoRepository(
                 "tagline",
                 "हमारे यहाँ हर प्रकार के फूल, पेड़-पौधा जैसे-गुलाब, गुलदावदी, गेंदा, क्रोटन सब गमले में तैयार पौधा भी मिलता है।"
             ) ?: "",
-            phone = prefs.getString("phone", "7631073743") ?: "7631073743",
-            addressLine1 = prefs.getString(
-                "addressLine1",
-                "ग्राम-बेदा, माँ ताराचण्डी रोड (माँ सीताराम मंदिर के निकट)"
-            ) ?: "",
-            addressLine2 = prefs.getString(
-                "addressLine2",
-                "पो०-सासाराम (रोहतास)"
-            ) ?: "",
+            phone = correctedPhone,
+            addressLine1 = correctedAddr1,
+            addressLine2 = rawAddr2,
             memoPrefix = prefs.getString("memoPrefix", "") ?: "",
-            nextMemoNumber = prefs.getInt("nextMemoNumber", 501),
+            nextMemoNumber = correctedNextNum,
             defaultTaxPercentage = prefs.getFloat("defaultTaxPercentage", 0f).toDouble(),
             enableTax = prefs.getBoolean("enableTax", false),
             customApiKey = prefs.getString("customApiKey", "") ?: "",
             selectedAiProvider = prefs.getString("selectedAiProvider", "gemini") ?: "gemini",
-            selectedAiModel = prefs.getString("selectedAiModel", "gemini-2.5-flash") ?: "gemini-2.5-flash",
+            selectedAiModel = correctedModel,
             signerName = prefs.getString("signerName", "VISHAL NURSERY") ?: "VISHAL NURSERY"
         )
     }

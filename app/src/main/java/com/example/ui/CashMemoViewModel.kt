@@ -14,6 +14,7 @@ import com.example.data.model.CustomerBalanceHistoryEntity
 import com.example.data.model.CustomerProfileEntity
 import com.example.data.model.PlantRateEntity
 import com.example.data.repository.CashMemoRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +24,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,7 +34,7 @@ import java.util.UUID
 import kotlin.math.max
 
 data class MemoEditorState(
-    val memoNumber: String = "501",
+    val memoNumber: String = "1001",
     val date: String = SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH).format(Date()),
     val selectedCustomerId: Long? = null,
     val customerName: String = "",
@@ -49,8 +53,7 @@ data class MemoEditorState(
     val notes: String = "",
     val isAnalyzing: Boolean = false,
     val analysisError: String? = null,
-    val aiValidationNote: String? = null,
-    val scannedBitmap: Bitmap? = null
+    val aiValidationNote: String? = null
 ) {
     val subtotal: Double
         get() = items.sumOf { it.amount }
@@ -86,15 +89,10 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     )
     private val geminiService = GeminiService()
 
-    private val _businessProfile = MutableStateFlow(repository.getBusinessProfile())
+    private val _businessProfile = MutableStateFlow(BusinessProfile())
     val businessProfile: StateFlow<BusinessProfile> = _businessProfile.asStateFlow()
 
-    private val _editorState = MutableStateFlow(
-        MemoEditorState(
-            memoNumber = _businessProfile.value.nextMemoNumber.toString(),
-            taxPercentage = if (_businessProfile.value.enableTax) _businessProfile.value.defaultTaxPercentage else 0.0
-        )
-    )
+    private val _editorState = MutableStateFlow(MemoEditorState())
     val editorState: StateFlow<MemoEditorState> = _editorState.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
@@ -147,9 +145,16 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     )
 
     init {
-        viewModelScope.launch {
-            repository.populateDefaultRatesIfEmpty()
-            repository.syncCustomersFromExistingMemosIfEmpty()
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.ensureCleanFreshState()
+            val profile = repository.getBusinessProfile()
+            _businessProfile.value = profile
+            _editorState.update { state ->
+                state.copy(
+                    memoNumber = profile.nextMemoNumber.toString(),
+                    taxPercentage = if (profile.enableTax) profile.defaultTaxPercentage else 0.0
+                )
+            }
         }
     }
 
@@ -169,6 +174,8 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     fun setDiscount(discount: Double) = _editorState.update { it.copy(discount = discount) }
     fun setTaxPercentage(tax: Double) = _editorState.update { it.copy(taxPercentage = tax) }
     fun setPreviousDues(dues: Double) = _editorState.update { it.copy(previousDues = dues) }
+
+    fun clearAnalysisError() = _editorState.update { it.copy(analysisError = null) }
 
     /**
      * Auto-fills customer details and their outstanding balance into the active Cash Memo editor.
@@ -196,7 +203,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         outstandingBalance: Double,
         promiseNote: String
     ) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.saveOrUpdateCustomerProfile(
                 id = id,
                 name = name,
@@ -214,7 +221,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         paymentMethod: String,
         remainingPromiseNote: String
     ) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.recordCustomerPaymentSettlement(
                 customer = customer,
                 amountReceivedNow = amountReceivedNow,
@@ -225,7 +232,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun deleteCustomer(customerId: Long) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.deleteCustomer(customerId)
         }
     }
@@ -291,7 +298,7 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         newPaymentMethod: String,
         newPaymentNote: String
     ) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val totalPayable = memo.totalPayableWithDues
             val updatedBalance = max(0.0, totalPayable - newPaidAmount)
             val finalNote = if (updatedBalance <= 0.009) "Fully Paid (चुकता)" else newPaymentNote
@@ -424,12 +431,12 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
             }
         }
         val modeStr = if (isWholesale) "Wholesale" else "Retail"
-        return "Added #${assignedIndex} ${plant.name} (₹$price, $modeStr) to New Memo"
+        return "Added #${assignedIndex} ${plant.name} (₹$price, $modeStr) to Bill"
     }
 
     // Rate catalog management
     fun addRate(name: String, retailPrice: Double, wholesalePrice: Double, category: String = "Plants") {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val entity = PlantRateEntity(
                 name = name.trim(),
                 retailPrice = retailPrice,
@@ -441,37 +448,29 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateRate(rate: PlantRateEntity) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.updateRate(rate)
         }
     }
 
     fun deleteRate(id: Long) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.deleteRate(id)
         }
     }
 
-    suspend fun exportRatesJson(): String {
-        return repository.exportRatesJson(null)
-    }
+    suspend fun exportRatesJson(): String = repository.exportRatesJson(null)
 
-    suspend fun importRatesJson(json: String): Int {
-        return repository.importRatesJson(json)
-    }
+    suspend fun importRatesJson(json: String): Int = repository.importRatesJson(json)
 
-    suspend fun exportAllMemosJson(): String {
-        return repository.exportAllMemosJson()
-    }
+    suspend fun exportAllMemosJson(): String = repository.exportAllMemosJson()
 
-    suspend fun importMemosJson(json: String): Int {
-        return repository.importMemosJson(json)
-    }
+    suspend fun importMemosJson(json: String): Int = repository.importMemosJson(json)
 
-    fun exportCurrentMemoItemsJson(): String {
-        val array = org.json.JSONArray()
+    suspend fun exportCurrentMemoItemsJson(): String = withContext(Dispatchers.Default) {
+        val array = JSONArray()
         for (item in _editorState.value.items) {
-            val obj = org.json.JSONObject()
+            val obj = JSONObject()
             obj.put("serialNo", item.serialNo)
             obj.put("description", item.description)
             obj.put("quantity", item.quantity)
@@ -479,17 +478,17 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
             obj.put("amount", item.amount)
             array.put(obj)
         }
-        return array.toString(2)
+        array.toString(2)
     }
 
-    suspend fun exportFullBackupJson(): String {
-        val root = org.json.JSONObject()
-        root.put("version", 3)
+    suspend fun exportFullBackupJson(): String = withContext(Dispatchers.IO) {
+        val root = JSONObject()
+        root.put("version", 4)
         root.put("exportTime", System.currentTimeMillis())
         val rates = repository.getAllRatesDirectly()
-        val ratesArr = org.json.JSONArray()
+        val ratesArr = JSONArray()
         for (r in rates) {
-            val obj = org.json.JSONObject()
+            val obj = JSONObject()
             obj.put("name", r.name)
             obj.put("retailPrice", r.retailPrice)
             obj.put("wholesalePrice", r.wholesalePrice)
@@ -499,9 +498,9 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         root.put("rates", ratesArr)
 
         val memos = repository.getAllCashMemosDirectly()
-        val memosArr = org.json.JSONArray()
+        val memosArr = JSONArray()
         for (m in memos) {
-            val obj = org.json.JSONObject()
+            val obj = JSONObject()
             obj.put("memoNumber", m.memoNumber)
             obj.put("customerName", m.customerName)
             obj.put("customerMobile", m.customerMobile)
@@ -523,13 +522,13 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
             memosArr.put(obj)
         }
         root.put("memos", memosArr)
-        return root.toString(2)
+        root.toString(2)
     }
 
-    suspend fun importFullBackupJson(json: String): Pair<Int, Int> {
+    suspend fun importFullBackupJson(json: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
         val trimmed = json.trim()
         if (trimmed.startsWith("{")) {
-            val root = org.json.JSONObject(trimmed)
+            val root = JSONObject(trimmed)
             var rateCount = 0
             var memoCount = 0
             if (root.has("rates")) {
@@ -539,11 +538,11 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
                 memoCount = repository.importMemosJson(root.getJSONArray("memos").toString())
             }
             if (rateCount > 0 || memoCount > 0) {
-                return Pair(rateCount, memoCount)
+                return@withContext Pair(rateCount, memoCount)
             }
         }
         val rateCount = repository.importRatesJson(json)
-        return Pair(rateCount, 0)
+        Pair(rateCount, 0)
     }
 
     fun resetEditor() {
@@ -554,9 +553,9 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
-    fun analyzeRoughBillImage(bitmap: Bitmap) {
+    fun analyzeRoughBillImage(bitmap: Bitmap, onErrorToast: ((String) -> Unit)? = null) {
         viewModelScope.launch {
-            _editorState.update { it.copy(isAnalyzing = true, analysisError = null, scannedBitmap = bitmap) }
+            _editorState.update { it.copy(isAnalyzing = true, analysisError = null) }
             val profile = _businessProfile.value
             val result = geminiService.analyzeRoughBillImage(
                 bitmap = bitmap,
@@ -564,11 +563,11 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
                 provider = profile.selectedAiProvider,
                 modelName = profile.selectedAiModel
             )
-            handleAnalysisResult(result)
+            handleAnalysisResult(result, onErrorToast)
         }
     }
 
-    fun analyzeRoughBillText(text: String) {
+    fun analyzeRoughBillText(text: String, onErrorToast: ((String) -> Unit)? = null) {
         viewModelScope.launch {
             _editorState.update { it.copy(isAnalyzing = true, analysisError = null) }
             val profile = _businessProfile.value
@@ -578,11 +577,14 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
                 provider = profile.selectedAiProvider,
                 modelName = profile.selectedAiModel
             )
-            handleAnalysisResult(result)
+            handleAnalysisResult(result, onErrorToast)
         }
     }
 
-    private fun handleAnalysisResult(result: Result<ExtractedBillResult>) {
+    private fun handleAnalysisResult(
+        result: Result<ExtractedBillResult>,
+        onErrorToast: ((String) -> Unit)? = null
+    ) {
         result.fold(
             onSuccess = { extracted ->
                 _editorState.update { state ->
@@ -606,111 +608,75 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
                 }
             },
             onFailure = { error ->
+                val msg = error.message ?: "Failed to analyze bill."
                 _editorState.update {
                     it.copy(
                         isAnalyzing = false,
-                        analysisError = error.message ?: "Failed to analyze bill."
+                        analysisError = msg
                     )
                 }
+                onErrorToast?.invoke(msg)
             }
         )
-    }
-
-    fun loadSampleRoughBill(sampleId: Int) {
-        when (sampleId) {
-            1 -> {
-                val sampleText = """
-                विशाल नर्सरी रफ काम:
-                ग्राहक: रमेश कुमार, सासाराम, फोन: 9835123456
-                - गुलाब का पौधा (लाल) 10 पीस @ 45 = 450
-                - गेंदा पौधा 15 पीस @ 20 = 300
-                - क्रोटन इंडोर 2 पीस @ 120 = 240
-                - मिट्टी का गमला (12 इंच) 4 पीस @ 85 = 340
-                - वर्मीकम्पोस्ट खाद 2 पैकेट @ 60 = 120
-                कुल छूट: 50
-                """.trimIndent()
-                analyzeRoughBillText(sampleText)
-            }
-            2 -> {
-                val sampleText = """
-                Rough bill:
-                Customer: Anita Devi, Sasaram
-                Mob: 7004128990
-                1. Mango Amrapali graft 2 @ 150 = 300
-                2. Guava plant 1 @ 80 = 80
-                3. Hibiscus (Gudhal) 4 @ 50 = 200
-                4. Ceramic planter 2 @ 180 = 360
-                5. Bone meal fertilizer 1 @ 90 = 90
-                """.trimIndent()
-                analyzeRoughBillText(sampleText)
-            }
-            3 -> {
-                val sampleText = """
-                Rough scratchpad:
-                Santosh Verma, Dehri On Sone, 9431002233
-                - Bougainvillea 5 @ 60 = 350 (note: shopkeeper rough mistake, 5x60 is 300)
-                - Money plant stick 2 @ 110 = 220
-                - Neem khali 3 @ 40 = 120
-                """.trimIndent()
-                analyzeRoughBillText(sampleText)
-            }
-        }
     }
 
     fun saveAndPreviewMemo(onSuccess: (Long) -> Unit) {
         val state = _editorState.value
         val profile = _businessProfile.value
 
-        val activeItems = state.items.filter { it.description.isNotBlank() || (it.quantity > 0 && it.rate > 0) }
-        val finalItems = if (activeItems.isNotEmpty()) {
-            activeItems.mapIndexed { idx, item -> item.copy(serialNo = idx + 1) }
-        } else {
-            state.items
-        }
-
-        val calculatedSubtotal = finalItems.sumOf { it.amount }
-        val calculatedTax = if (state.taxPercentage > 0) max(0.0, (calculatedSubtotal - state.discount) * (state.taxPercentage / 100.0)) else 0.0
-        val calculatedGrandTotal = max(0.0, calculatedSubtotal - state.discount + calculatedTax)
-        val calculatedTotalPayable = calculatedGrandTotal + state.previousDues
-
-        val finalPaidAmount = if (state.hasCustomPayment) state.paidAmount else calculatedTotalPayable
-        val finalBalanceDue = if (state.hasCustomPayment) max(0.0, calculatedTotalPayable - state.paidAmount) else 0.0
-        val finalPaymentNote = if (state.hasCustomPayment) {
-            if (finalBalanceDue > 0.009) state.paymentDueNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)"
-        } else {
-            ""
-        }
-
-        val entity = CashMemoEntity(
-            memoNumber = state.memoNumber,
-            date = state.date,
-            customerName = state.customerName,
-            customerMobile = state.customerMobile,
-            customerAddress = state.customerAddress,
-            itemsJson = CashMemoRepository.serializeItems(finalItems),
-            subtotal = calculatedSubtotal,
-            discount = state.discount,
-            taxPercentage = state.taxPercentage,
-            taxAmount = calculatedTax,
-            previousDues = state.previousDues,
-            grandTotal = calculatedGrandTotal,
-            paidAmount = finalPaidAmount,
-            balanceDue = finalBalanceDue,
-            paymentMethod = state.paymentMethod,
-            paymentStatusNote = finalPaymentNote,
-            notes = state.aiValidationNote ?: "",
-            businessName = profile.shopNameHindi,
-            businessPhone = profile.phone,
-            businessAddress = "${profile.addressLine1}, ${profile.addressLine2}".trim().trim(','),
-            signerName = profile.signerName
-        )
-
         viewModelScope.launch {
-            val id = repository.saveMemo(entity)
-            val savedEntity = entity.copy(id = id)
+            val savedEntity = withContext(Dispatchers.IO) {
+                val activeItems = state.items.filter { it.description.isNotBlank() || (it.quantity > 0 && it.rate > 0) }
+                val finalItems = if (activeItems.isNotEmpty()) {
+                    activeItems.mapIndexed { idx, item -> item.copy(serialNo = idx + 1) }
+                } else {
+                    state.items
+                }
+
+                val calculatedSubtotal = finalItems.sumOf { it.amount }
+                val calculatedTax = if (state.taxPercentage > 0) max(0.0, (calculatedSubtotal - state.discount) * (state.taxPercentage / 100.0)) else 0.0
+                val calculatedGrandTotal = max(0.0, calculatedSubtotal - state.discount + calculatedTax)
+                val calculatedTotalPayable = calculatedGrandTotal + state.previousDues
+
+                val finalPaidAmount = if (state.hasCustomPayment) state.paidAmount else calculatedTotalPayable
+                val finalBalanceDue = if (state.hasCustomPayment) max(0.0, calculatedTotalPayable - state.paidAmount) else 0.0
+                val finalPaymentNote = if (state.hasCustomPayment) {
+                    if (finalBalanceDue > 0.009) state.paymentDueNote.ifBlank { "Next Day (कल देगा)" } else "Fully Paid (चुकता)"
+                } else {
+                    ""
+                }
+
+                val entity = CashMemoEntity(
+                    memoNumber = state.memoNumber,
+                    date = state.date,
+                    customerName = state.customerName,
+                    customerMobile = state.customerMobile,
+                    customerAddress = state.customerAddress,
+                    itemsJson = CashMemoRepository.serializeItems(finalItems),
+                    subtotal = calculatedSubtotal,
+                    discount = state.discount,
+                    taxPercentage = state.taxPercentage,
+                    taxAmount = calculatedTax,
+                    previousDues = state.previousDues,
+                    grandTotal = calculatedGrandTotal,
+                    paidAmount = finalPaidAmount,
+                    balanceDue = finalBalanceDue,
+                    paymentMethod = state.paymentMethod,
+                    paymentStatusNote = finalPaymentNote,
+                    notes = state.aiValidationNote ?: "",
+                    businessName = profile.shopNameHindi,
+                    businessPhone = profile.phone,
+                    businessAddress = "${profile.addressLine1}, ${profile.addressLine2}".trim().trim(','),
+                    signerName = profile.signerName
+                )
+
+                val id = repository.saveMemo(entity)
+                _businessProfile.value = repository.getBusinessProfile()
+                entity.copy(id = id)
+            }
+
             _previewMemo.value = savedEntity
-            _businessProfile.value = repository.getBusinessProfile()
-            onSuccess(id)
+            onSuccess(savedEntity.id)
         }
     }
 
@@ -719,34 +685,47 @@ class CashMemoViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun loadMemoIntoEditor(memo: CashMemoEntity) {
-        val items = CashMemoRepository.deserializeItems(memo.itemsJson)
-        val hasCustom = memo.balanceDue > 0.009 || (memo.paidAmount > 0.0 && memo.paidAmount != memo.totalPayableWithDues)
-        _editorState.value = MemoEditorState(
-            memoNumber = memo.memoNumber,
-            date = memo.date,
-            customerName = memo.customerName,
-            customerMobile = memo.customerMobile,
-            customerAddress = memo.customerAddress,
-            items = if (items.isNotEmpty()) items else listOf(CashMemoItem(id = UUID.randomUUID().toString(), serialNo = 1)),
-            discount = memo.discount,
-            taxPercentage = memo.taxPercentage,
-            previousDues = memo.previousDues,
-            hasCustomPayment = hasCustom,
-            paidAmount = memo.effectivePaidAmount,
-            paymentMethod = memo.paymentMethod.ifBlank { "Cash" },
-            paymentDueNote = memo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" },
-            aiValidationNote = memo.notes
-        )
+        viewModelScope.launch {
+            val items = withContext(Dispatchers.Default) {
+                CashMemoRepository.deserializeItems(memo.itemsJson)
+            }
+            val hasCustom = memo.balanceDue > 0.009 || (memo.paidAmount > 0.0 && memo.paidAmount != memo.totalPayableWithDues)
+            _editorState.value = MemoEditorState(
+                memoNumber = memo.memoNumber,
+                date = memo.date,
+                customerName = memo.customerName,
+                customerMobile = memo.customerMobile,
+                customerAddress = memo.customerAddress,
+                items = if (items.isNotEmpty()) items else listOf(CashMemoItem(id = UUID.randomUUID().toString(), serialNo = 1)),
+                discount = memo.discount,
+                taxPercentage = memo.taxPercentage,
+                previousDues = memo.previousDues,
+                hasCustomPayment = hasCustom,
+                paidAmount = memo.effectivePaidAmount,
+                paymentMethod = memo.paymentMethod.ifBlank { "Cash" },
+                paymentDueNote = memo.paymentStatusNote.ifBlank { "Next Day (कल देगा)" },
+                aiValidationNote = memo.notes
+            )
+        }
     }
 
     fun deleteMemo(id: Long) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.deleteMemo(id)
         }
     }
 
     fun updateBusinessProfile(profile: BusinessProfile) {
-        repository.saveBusinessProfile(profile)
-        _businessProfile.value = profile
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.saveBusinessProfile(profile)
+            _businessProfile.value = profile
+            _editorState.update { state ->
+                if (state.items.size == 1 && state.items.first().description.isBlank() && state.subtotal == 0.0) {
+                    state.copy(memoNumber = profile.nextMemoNumber.toString())
+                } else {
+                    state
+                }
+            }
+        }
     }
 }
